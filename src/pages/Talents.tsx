@@ -114,7 +114,7 @@ export default function Talents() {
       filters.minAge !== 18 || 
       filters.maxAge !== 40;
     
-    setHasSearched(hasActiveFilters);
+    setHasSearched(Boolean(hasActiveFilters));
   }, [searchQuery, filters]);
 
   // Memo untuk filter dan sorting talent agar tidak dihitung ulang setiap render

@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatPrice } from "@/lib/utils";
-import { calculateMitraEarnings, getBookings } from "@/lib/bookingStore";
+import { calculateMitraEarnings, getBookings, isBookingCompleted } from "@/lib/bookingStore";
+import { getAppCommission } from "@/lib/paymentUtils";
 import { getCurrentMitra } from "@/lib/mitraStore";
 
 interface EarningsDetailsProps {
@@ -38,13 +39,13 @@ export function EarningsDetails({ isTalentMode }: EarningsDetailsProps) {
     
     if (isTalentMode) {
       mitraBookings = allBookings.filter(
-        (booking) => booking.talentId === currentMitra.talentId && booking.approvalStatus === "completed"
+        (booking) => booking.talentId === currentMitra.talentId && isBookingCompleted(booking)
       );
     } else {
       mitraBookings = allBookings.filter(
         (booking) => 
           booking.userId === currentMitra.talentId && 
-          booking.approvalStatus === "completed"
+          isBookingCompleted(booking)
       );
     }
     
@@ -54,7 +55,7 @@ export function EarningsDetails({ isTalentMode }: EarningsDetailsProps) {
       .slice(0, 5)
       .map(booking => {
         const totalAmount = booking.total || 0;
-        const commissionPercentage = 20; // Default 20%, seharusnya diambil dari getAppCommission()
+        const commissionPercentage = getAppCommission();
         const commissionAmount = Math.round(totalAmount * (commissionPercentage / 100));
         const netAmount = totalAmount - commissionAmount;
         

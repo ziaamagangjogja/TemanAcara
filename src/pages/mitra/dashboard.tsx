@@ -18,11 +18,13 @@ import {
   CheckCircle,
   XCircle,
   ChevronDown,
+  ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -31,8 +33,11 @@ import {
   getBookings,
   updateBooking,
   subscribeToBookings,
+  refreshBookingsFromSupabase,
   calculateMitraEarnings, // PERBAIKAN: Import fungsi baru
+  calculateMitraRating,
   subscribeToCompletedBookings, // PERBAIKAN: Import fungsi baru
+  isBookingCompleted,
 } from "@/lib/bookingStore";
 import { getCurrentMitra, updateMitraProfile, subscribeToMitraChanges } from "@/lib/mitraStore";
 import {
@@ -65,7 +70,7 @@ type Chat = {
   lastMessage: string;
   lastMessageTime: Date;
   messages: Message[];
-  bookingStatus: "pending" | "approved" | "completed" | "cancelled" | "active";
+  bookingStatus: "pending" | "pending_mitra" | "approved" | "completed" | "cancelled" | "active" | "rejected";
   bookingDate: string;
   bookingTime: string;
   bookingDuration: number;
@@ -77,15 +82,17 @@ type Chat = {
 export default function MitraDashboard() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  
+
   // --- STATE UNTUK MODE GANDA ---
   const [activeMode, setActiveMode] = useState<MitraRole>("talent");
   const [mitraAsTalent, setMitraAsTalent] = useState(getCurrentMitra());
   const [mitraAsBooker, setMitraAsBooker] = useState(getCurrentMitra());
-  
+
   // --- STATE LAINNYA ---
   const [searchQuery, setSearchQuery] = useState("");
   const [bookings, setBookings] = useState<SharedBooking[]>([]);
+  const [pendingBookingCount, setPendingBookingCount] = useState(0);
+  const [pendingBookingIds, setPendingBookingIds] = useState<string[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messageInput, setMessageInput] = useState("");
@@ -99,12 +106,18 @@ export default function MitraDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState(Date.now());
+  const [currentTime, setCurrentTime] = useState(Date.now());
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Helper untuk mendapatkan data mitra berdasarkan mode
   const currentMitra = activeMode === "talent" ? mitraAsTalent : mitraAsBooker;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // --- FUNGSI YANG DIPERBAIKI & DIOPTIMASI ---
 
@@ -119,35 +132,46 @@ export default function MitraDashboard() {
       }
 
       console.log(`MitraDashboard: Loading bookings for mode: ${mode}`);
-      const allBookings = getBookings();
+      const allBookings = await refreshBookingsFromSupabase();
+
+      const pendingBookings = mode === "talent"
+        ? allBookings.filter(
+            (booking) =>
+              booking.talentId === currentMitraData.talentId &&
+              booking.approvalStatus === "pending_approval"
+          )
+        : [];
+      const pendingIds = pendingBookings.map((booking) => booking.id);
+      const seenPendingIds = JSON.parse(localStorage.getItem("rentmate_seen_mitra_orders") || "[]") as string[];
+      setPendingBookingIds(pendingIds);
+      setPendingBookingCount(pendingIds.filter((bookingId) => !seenPendingIds.includes(bookingId)).length);
 
       let mitraBookings: SharedBooking[] = [];
       if (mode === "talent") {
         mitraBookings = allBookings.filter(
-          (booking) => booking.talentId === currentMitraData.talentId && booking.approvalStatus === "approved"
+          (booking) => booking.talentId === currentMitraData.talentId
         );
       } else {
         mitraBookings = allBookings.filter(
-          (booking) => 
-            booking.userId === currentMitraData.talentId && 
-            booking.approvalStatus === "approved"
+          (booking) =>
+            booking.userId === currentMitraData.talentId
         );
       }
-      
+
       const transformedChats: Chat[] = mitraBookings.map((booking) => {
         const chatSession = getChatSessionByBookingId(booking.id);
-        
+
         const mappedMessages = (chatSession?.messages || []).map(msg => {
           let isFromMe = false;
-          
+
           if (mode === "talent") {
             isFromMe = msg.senderType === "talent";
           } else {
-            isFromMe = 
+            isFromMe =
               (msg.senderType === "user" && msg.senderId === currentMitraData.talentId) ||
               (msg.senderType === 'mitra-as-booker' && msg.senderId === currentMitraData.talentId);
           }
-          
+
           let senderName = currentMitraData?.name || "Saya";
           let senderPhoto = currentMitraData?.photo || "";
           if (!isFromMe) {
@@ -170,14 +194,19 @@ export default function MitraDashboard() {
             isFromMe,
           };
         });
-        
+
         const bookingStartTime = new Date(`${booking.date}T${booking.time}`);
         const bookingEndTime = new Date(bookingStartTime);
         bookingEndTime.setHours(bookingEndTime.getHours() + booking.duration);
         const now = new Date();
-        
-        let status: "pending" | "approved" | "completed" | "cancelled" | "active";
-        if (booking.approvalStatus !== "approved") {
+
+        let status: "pending" | "pending_mitra" | "approved" | "completed" | "cancelled" | "active" | "rejected";
+        if (booking.approvalStatus === "rejected") {
+          status = "rejected";
+        } else if (booking.approvalStatus === "pending_mitra") {
+          // Admin sudah verifikasi; kini giliran Mitra menyetujui/menolak.
+          status = "pending_mitra";
+        } else if (booking.approvalStatus === "pending_approval") {
           status = "pending";
         } else if (bookingEndTime < now) {
           status = "completed";
@@ -246,11 +275,17 @@ export default function MitraDashboard() {
     }
   }, [toast, mitraAsTalent, mitraAsBooker]);
 
-  const updateStats = useCallback(() => {
+  const updateStats = useCallback(async (forceRefresh = false) => {
     try {
       const currentMitraData = activeMode === "talent" ? mitraAsTalent : mitraAsBooker;
       if (!currentMitraData || !currentMitraData.id) {
         return;
+      }
+
+      // PERBAIKAN cross-tab: Refresh data dari Supabase agar rating yang diberikan
+      // di tab/browser lain (oleh user) langsung ter-sinkron ke cache mitra ini.
+      if (forceRefresh) {
+        await refreshBookingsFromSupabase();
       }
 
       // PERBAIKAN: Gunakan fungsi baru untuk menghitung pendapatan
@@ -269,21 +304,17 @@ export default function MitraDashboard() {
       }
       
       const completedBookings = mitraBookings.filter((booking) => {
-        if (booking.approvalStatus !== "approved") return false;
-        const bookingEndTime = new Date(`${booking.date}T${booking.time}`);
-        if (isNaN(bookingEndTime.getTime())) return false;
-        bookingEndTime.setHours(bookingEndTime.getHours() + booking.duration);
-        return bookingEndTime < new Date();
+        return isBookingCompleted(booking);
       });
     
-      const totalChats = mitraBookings.filter((booking) => booking.approvalStatus === "approved").length;
+      const chatBookings = mitraBookings.filter(
+        (booking) => booking.approvalStatus === "approved" || booking.approvalStatus === "completed"
+      );
+      const totalChats = chatBookings.length;
       
-      const ratings = completedBookings.filter(booking => booking.rating).map(booking => booking.rating);
-      const avgRating = ratings.length > 0 
-        ? (ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length).toFixed(1)
-        : "0.0";
+      const avgRating = calculateMitraRating(currentMitraData.talentId).toFixed(1);
 
-      const respondedChats = mitraBookings.filter(
+      const respondedChats = chatBookings.filter(
         (booking) => {
           const chatSession = getChatSessionByBookingId(booking.id);
           return chatSession && chatSession.messages.some(msg => 
@@ -332,6 +363,13 @@ export default function MitraDashboard() {
     localStorage.removeItem("rentmate_current_mitra");
     toast({ title: "Logout Berhasil", description: "Anda telah keluar dari Dashboard Mitra" });
     navigate("/mitra/login");
+  };
+
+  const markPendingBookingsAsSeen = () => {
+    const seenPendingIds = JSON.parse(localStorage.getItem("rentmate_seen_mitra_orders") || "[]") as string[];
+    const mergedIds = [...new Set([...seenPendingIds, ...pendingBookingIds])];
+    localStorage.setItem("rentmate_seen_mitra_orders", JSON.stringify(mergedIds));
+    setPendingBookingCount(0);
   };
 
   const handleSendMessage = useCallback(() => {
@@ -399,7 +437,7 @@ export default function MitraDashboard() {
     console.log(`MitraDashboard: Active mode changed to ${activeMode}. Reloading data.`);
     setIsLoading(true);
     loadBookings(activeMode).then(() => {
-      updateStats();
+      updateStats(true); // force refresh Supabase agar rating terbaru dari user ter-sinkron
       setIsLoading(false);
     });
   }, [activeMode, loadBookings, updateStats]);
@@ -434,8 +472,9 @@ export default function MitraDashboard() {
       loadBookings(activeMode);
       updateStats();
     });
-    const unsubscribeMitra = subscribeToMitraChanges((updatedMitra) => {
-      if (updatedMitra.id === mitraAsTalent?.id) {
+    const unsubscribeMitra = subscribeToMitraChanges(() => {
+      const updatedMitra = getCurrentMitra();
+      if (updatedMitra?.id === mitraAsTalent?.id) {
         setMitraAsTalent(updatedMitra);
         setMitraAsBooker(updatedMitra);
       }
@@ -459,36 +498,20 @@ export default function MitraDashboard() {
     };
     window.addEventListener("bookingApproved", handleBookingApproved);
 
-    // OPTIMASI: Interval polling yang lebih cerdas
-    let intervalId: ReturnType<typeof setInterval>;
-    
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        clearInterval(intervalId);
         console.log("MitraDashboard: Tab is hidden, stopping polling.");
       } else {
         console.log("MitraDashboard: Tab is visible, starting polling.");
-        intervalId = setInterval(() => {
-          if (isOnline) {
-            loadBookings(activeMode);
-            updateStats();
-          }
-        }, 30000); // 30 detik
+        if (isOnline) {
+          void loadBookings(activeMode);
+          void updateStats(true);
+        }
       }
     };
     
     document.addEventListener('visibilitychange', handleVisibilityChange);
     
-    // Set interval awal jika tab terlihat
-    if (!document.hidden) {
-      intervalId = setInterval(() => {
-        if (isOnline) {
-          loadBookings(activeMode);
-          updateStats();
-        }
-      }, 30000);
-    }
-
     return () => {
       unsubscribeBookings();
       unsubscribeMitra();
@@ -497,7 +520,6 @@ export default function MitraDashboard() {
       window.removeEventListener("chatSessionsUpdated", handleAnyChatUpdate);
       window.removeEventListener("bookingApproved", handleBookingApproved);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      clearInterval(intervalId);
     };
   }, [loadBookings, updateStats, activeMode, mitraAsTalent, mitraAsBooker, toast, isOnline]);
 
@@ -518,6 +540,15 @@ export default function MitraDashboard() {
   }, [selectedChat, markMessagesAsRead]);
   
   // --- HELPER FUNCTIONS ---
+  // Ambil inisial dari nama untuk fallback avatar (maks 2 huruf).
+  const getInitials = (name?: string) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return "?";
+    const parts = trimmed.split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  };
+
   const formatTime = (date: Date) => {
     const now = new Date();
     const diff = now.getTime() - new Date(date).getTime();
@@ -526,6 +557,32 @@ export default function MitraDashboard() {
     if (days === 1) return "Kemarin";
     if (days < 7) return `${days} hari lalu`;
     return new Date(date).toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+  };
+
+  const getBookingEndTime = (chat: Chat) => {
+    const start = new Date(`${String(chat.bookingDate).slice(0, 10)}T${String(chat.bookingTime).slice(0, 8)}`);
+    if (Number.isNaN(start.getTime())) return null;
+    return new Date(start.getTime() + chat.bookingDuration * 60 * 60 * 1000);
+  };
+
+  const formatRemainingTime = (chat: Chat) => {
+    const endTime = getBookingEndTime(chat);
+    if (!endTime) return "";
+
+    const remainingSeconds = Math.max(0, Math.floor((endTime.getTime() - currentTime) / 1000));
+    const hours = Math.floor(remainingSeconds / 3600);
+    const minutes = Math.floor((remainingSeconds % 3600) / 60);
+    const seconds = remainingSeconds % 60;
+
+    if (hours > 0) return `${hours}j ${String(minutes).padStart(2, "0")}m`;
+    return `${minutes}m ${String(seconds).padStart(2, "0")}d`;
+  };
+
+  const formatBookingDate = (date: string) => {
+    const parsedDate = new Date(String(date).slice(0, 10));
+    return Number.isNaN(parsedDate.getTime())
+      ? String(date)
+      : parsedDate.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
   };
 
   // OPTIMASI: Menggunakan useMemo untuk daftar chat yang difilter
@@ -547,7 +604,7 @@ export default function MitraDashboard() {
             </div>
             <div>
               <span className="font-bold text-xl">Dashboard Mitra</span>
-              <p className="text-xs text-muted-foreground">Mode: <span className="font-semibold text-primary">{activeMode === "talent" ? "Talent" : "Booker"}</span></p>
+              <p className="text-xs text-muted-foreground">Mode: <span className="font-semibold text-primary">{activeMode === "talent" ? "Talent" : "Sebagai Pemesan"}</span></p>
             </div>
           </div>
           
@@ -558,7 +615,7 @@ export default function MitraDashboard() {
                 <User className="w-4 h-4 mr-1" /> Talent
               </Button>
               <Button variant={activeMode === "booker" ? "default" : "ghost"} size="sm" onClick={() => setActiveMode("booker")} className="px-3">
-                <Calendar className="w-4 h-4 mr-1" /> Booker
+                <Calendar className="w-4 h-4 mr-1" /> Pemesan
               </Button>
             </div>
 
@@ -577,8 +634,9 @@ export default function MitraDashboard() {
               </Button>
               {isDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-48 bg-background rounded-lg shadow-lg border border-border py-1 z-50">
-                  <Link to="/mitra/pengaturan" onClick={() => setIsDropdownOpen(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors">
-                    <Settings className="w-4 h-4" /> Pengaturan
+                  <Link to="/mitra/pengaturan" onClick={() => { markPendingBookingsAsSeen(); setIsDropdownOpen(false); }} className="flex items-center justify-between gap-2 w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors">
+                    <span className="flex items-center gap-2"><Settings className="w-4 h-4" /> Pengaturan</span>
+                    {pendingBookingCount > 0 && <Badge variant="destructive" className="h-5 min-w-5 px-1 justify-center text-[10px]">{pendingBookingCount}</Badge>}
                   </Link>
                   <hr className="my-1 border-border" />
                   <button onClick={() => { setIsDropdownOpen(false); handleLogout(); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left">
@@ -595,7 +653,7 @@ export default function MitraDashboard() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-3xl font-bold">Selamat datang, {currentMitra?.name || "Mitra"}</h1>
-            <p className="text-muted-foreground">Kelola percakapan dan jadwal Anda sebagai <span className="font-semibold">{activeMode === "talent" ? "Talent" : "Booker"}</span></p>
+            <p className="text-muted-foreground">Kelola percakapan dan jadwal Anda sebagai <span className="font-semibold">{activeMode === "talent" ? "Talent" : "Pemesan"}</span></p>
             <div className="flex items-center gap-2 mt-1">
               <p className="text-xs text-muted-foreground">Terakhir diperbarui: {new Date(lastUpdateTime).toLocaleTimeString("id-ID")}</p>
               {!isOnline && <Badge variant="destructive" className="text-xs">Offline</Badge>}
@@ -625,12 +683,35 @@ export default function MitraDashboard() {
           );})}
         </div>
 
+        {activeMode === "talent" && pendingBookingCount > 0 && (
+          <Card className="mb-8 border-primary/30 bg-primary/5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                  <Bell className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="font-semibold">Ada pesanan baru</h2>
+                  <p className="text-sm text-muted-foreground">
+                    {pendingBookingCount} pesanan menunggu persetujuan Anda.
+                  </p>
+                </div>
+              </div>
+              <Link to="/mitra/pengaturan" className="shrink-0" onClick={markPendingBookingsAsSeen}>
+                <Button size="sm" className="gap-2">
+                  Lihat Pesanan <ArrowRight className="w-4 h-4" />
+                </Button>
+              </Link>
+            </div>
+          </Card>
+        )}
+
         <div className="grid lg:grid-cols-3 gap-6">
           <Card className="lg:col-span-1 overflow-hidden">
             <div className="p-4 border-b">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">Percakapan</h2>
-                <Badge variant="outline">{chats.length} Chat</Badge>
+                <h2 className="text-lg font-semibold">Pelanggan & Percakapan</h2>
+                <Badge variant="outline">{chats.length}</Badge>
               </div>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -646,9 +727,14 @@ export default function MitraDashboard() {
                 <div className="divide-y">
                   {/* PERBAIKAN: Gunakan filteredChats yang sudah dioptimasi */}
                   {filteredChats.map((chat) => (
-                    <div key={chat.id} className={`p-4 cursor-pointer hover:bg-muted/50 transition-colors ${selectedChat?.id === chat.id ? "bg-muted/50" : ""}`} onClick={() => setSelectedChat(chat)}>
+                    <div key={chat.id} className={`p-4 cursor-pointer hover:bg-muted/50 transition-colors ${selectedChat?.id === chat.id ? "bg-muted/50" : ""}`} onClick={() => (chat.bookingStatus === "pending" || chat.bookingStatus === "pending_mitra") ? navigate("/mitra/pengaturan") : setSelectedChat(chat)}>
                       <div className="flex items-start gap-3">
-                        <img src={chat.userPhoto} alt={chat.userName} className="w-10 h-10 rounded-full object-cover" />
+                        <Avatar className="w-10 h-10">
+                          {chat.userPhoto && <AvatarImage src={chat.userPhoto} alt={chat.userName} className="object-cover" />}
+                          <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+                            {getInitials(chat.userName)}
+                          </AvatarFallback>
+                        </Avatar>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
                             <h3 className="font-medium truncate">{chat.userName}</h3>
@@ -656,9 +742,14 @@ export default function MitraDashboard() {
                           </div>
                           <p className="text-sm text-muted-foreground truncate">{chat.lastMessage}</p>
                           <div className="flex items-center gap-2 mt-1">
-                            <Badge variant={chat.bookingStatus === "completed" ? "success" : chat.bookingStatus === "cancelled" ? "destructive" : chat.bookingStatus === "active" ? "default" : "outline"} className="text-xs">
-                              {chat.bookingStatus === "completed" ? "Selesai" : chat.bookingStatus === "cancelled" ? "Dibatalkan" : chat.bookingStatus === "active" ? "Sedang Berlangsung" : "Aktif"}
+                            <Badge variant={chat.bookingStatus === "completed" ? "success" : chat.bookingStatus === "cancelled" || chat.bookingStatus === "rejected" ? "destructive" : chat.bookingStatus === "active" ? "default" : chat.bookingStatus === "pending_mitra" ? "warning" : "outline"} className="text-xs">
+                              {chat.bookingStatus === "completed" ? "Selesai" : chat.bookingStatus === "cancelled" ? "Dibatalkan" : chat.bookingStatus === "rejected" ? "Ditolak" : chat.bookingStatus === "pending_mitra" ? "Perlu persetujuan Anda" : chat.bookingStatus === "pending" ? "Menunggu admin" : chat.bookingStatus === "active" ? "Sedang Berlangsung" : "Disetujui"}
                             </Badge>
+                            {chat.bookingStatus === "active" && (
+                              <Badge variant="default" className="text-xs gap-1">
+                                <Clock className="w-3 h-3" /> {formatRemainingTime(chat)}
+                              </Badge>
+                            )}
                             {chat.isUnread && <div className="w-2 h-2 bg-primary rounded-full"></div>}
                           </div>
                         </div>
@@ -671,8 +762,8 @@ export default function MitraDashboard() {
                   <MessageSquare className="w-16 h-16 text-muted-foreground mb-4" />
                   <h3 className="text-lg font-semibold mb-2">Anda belum memiliki chat</h3>
                   <p className="text-muted-foreground text-sm">
-                    {activeMode === "talent" 
-                      ? "Tunggu hingga ada klien yang melakukan booking" 
+                    {activeMode === "talent"
+                      ? "Tunggu hingga ada klien yang melakukan booking"
                       : "Tunggu hingga ada chat dengan talent yang Anda pesan"}
                   </p>
                   <Button variant="outline" className="mt-4" onClick={() => navigate("/")}>Kembali ke Beranda</Button>
@@ -686,14 +777,24 @@ export default function MitraDashboard() {
               <>
                 <div className="p-4 border-b">
                   <div className="flex items-center gap-3">
-                    <img src={selectedChat.userPhoto} alt={selectedChat.userName} className="w-10 h-10 rounded-full object-cover" />
+                    <Avatar className="w-10 h-10">
+                      {selectedChat.userPhoto && <AvatarImage src={selectedChat.userPhoto} alt={selectedChat.userName} className="object-cover" />}
+                      <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+                        {getInitials(selectedChat.userName)}
+                      </AvatarFallback>
+                    </Avatar>
                     <div className="flex-1">
                       <h3 className="font-semibold">{selectedChat.userName}</h3>
                       <div className="flex items-center gap-2">
                         <Badge variant={selectedChat.bookingStatus === "completed" ? "success" : selectedChat.bookingStatus === "cancelled" ? "destructive" : selectedChat.bookingStatus === "active" ? "default" : "outline"} className="text-xs">
                           {selectedChat.bookingStatus === "completed" ? "Selesai" : selectedChat.bookingStatus === "cancelled" ? "Dibatalkan" : selectedChat.bookingStatus === "active" ? "Sedang Berlangsung" : "Aktif"}
                         </Badge>
-                        <span className="text-xs text-muted-foreground">{selectedChat.bookingDate}, {selectedChat.bookingTime} ({selectedChat.bookingDuration} jam)</span>
+                        {selectedChat.bookingStatus === "active" && (
+                          <Badge variant="default" className="text-xs gap-1">
+                            <Clock className="w-3 h-3" /> Sisa {formatRemainingTime(selectedChat)}
+                          </Badge>
+                        )}
+                        <span className="text-xs text-muted-foreground">{formatBookingDate(selectedChat.bookingDate)}, {selectedChat.bookingTime.slice(0, 5)} ({selectedChat.bookingDuration} jam)</span>
                       </div>
                     </div>
                     <Button variant="ghost" size="sm"><Settings className="w-4 h-4" /></Button>

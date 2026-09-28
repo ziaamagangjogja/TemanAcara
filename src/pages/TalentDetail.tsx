@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -13,17 +13,68 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
-import { reviews } from "@/data/mockData";
+import { refreshBookingsFromSupabase } from "@/lib/bookingStore";
+
+// Bentuk data talent yang benar-benar dipakai halaman ini. Field dari API
+// (getAllVerifiedTalents) bersifat opsional karena talent legacy memakai field
+// yang berbeda (bio, pricePerHour, verified, dst).
+interface TalentView {
+  id: string;
+  talentId?: string;
+  name: string;
+  photo?: string;
+  city?: string;
+  age?: number;
+  gender?: string;
+  price?: number;
+  pricePerHour?: number;
+  availability?: "online" | "offline" | "both";
+  bio?: string;
+  description?: string;
+  hobbies?: string;
+  skills?: string[];
+  rules?: string[];
+  rating?: number;
+  reviewCount?: number;
+  isVerified?: boolean;
+  verified?: boolean;
+}
+
+interface TalentReview {
+  id: string;
+  userName: string;
+  userPhoto?: string;
+  rating: number;
+  comment?: string;
+  date?: string;
+  /** true untuk ulasan pengisi (demo), false/undefined untuk ulasan nyata. */
+  isDemo?: boolean;
+}
+
+
 
 export default function TalentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  
-  const [talent, setTalent] = useState<any | null>(null);
+  const { toast } = useToast();
+
+  const [talent, setTalent] = useState<TalentView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [liked, setLiked] = useState(false);
+  const [userReviews, setUserReviews] = useState<TalentReview[]>([]);
+
+  // Pagination ulasan: hanya render sebagian dulu agar halaman tidak berat saat
+  // reviewCount besar (ratusan). User bisa klik untuk menampilkan sisanya.
+  const REVIEWS_PAGE_SIZE = 6;
+  const [visibleReviewCount, setVisibleReviewCount] = useState(REVIEWS_PAGE_SIZE);
+
+  // Reset jumlah ulasan yang tampil setiap kali pindah ke talent lain.
+  useEffect(() => {
+    setVisibleReviewCount(REVIEWS_PAGE_SIZE);
+  }, [id]);
 
   const loadTalentDetail = useCallback(async () => {
     if (!id) {
@@ -36,17 +87,21 @@ export default function TalentDetail() {
     setIsLoading(true);
     try {
       const allTalents = await getAllVerifiedTalents();
-      const foundTalent = Array.isArray(allTalents) ? allTalents.find((t) => t.id === id) : null;
-      
+      // Cocokkan berdasarkan id ATAU talentId, karena getMerchants mengembalikan
+      // keduanya dan keduanya bisa jadi sumber rute yang berbeda.
+      const foundTalent = Array.isArray(allTalents)
+        ? allTalents.find((t) => t.id === id || t.talentId === id)
+        : null;
+
       if (foundTalent) {
-        setTalent(foundTalent);
+        setTalent(foundTalent as TalentView);
       } else {
         navigate("/talents");
         return;
       }
-    } catch (err: any) {
-      console.error("Gagal memuat detail talent:", err);
-      setError(err.message || "Terjadi kesalahan saat memuat data.");
+    } catch (err) {
+    console.error("Gagal memuat detail talent:", err);
+    setError(err instanceof Error ? err.message : "Terjadi kesalahan saat memuat data.");
     } finally {
       setIsLoading(false);
     }
@@ -56,28 +111,74 @@ export default function TalentDetail() {
     loadTalentDetail();
   }, [loadTalentDetail]);
 
-  const userReviews = (() => {
-    try {
-      const stored = localStorage.getItem("rentmate_user_reviews");
-      if (!stored) return [];
-      const arr = JSON.parse(stored) as Array<{ bookingId: string; rating: number; comment: string; talentId: string }>;
-      return arr
-        .filter((r) => r.talentId === id)
-        .map((r, idx) => ({
-          id: `ur_${idx}_${r.bookingId}`,
-          talentId: r.talentId,
-          userName: "Anda",
-          userPhoto: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face",
-          rating: r.rating,
-          comment: r.comment,
-          date: new Date().toISOString(),
-        }));
-    } catch {
-      return [];
-    }
-  })();
-  
-  const talentReviews = [...reviews.filter((r) => r.talentId === id), ...userReviews];
+  useEffect(() => {
+    if (!id) return;
+
+    const loadUserReviews = async () => {
+      try {
+        const bookings = await refreshBookingsFromSupabase();
+        const ratedBookings = bookings.filter(
+          (booking) => booking.talentId === id && typeof booking.rating === "number"
+        );
+
+        const reviewsWithUsers = await Promise.all(
+          ratedBookings.map(async (booking) => {
+            let userName = booking.userName || "User";
+            let userPhoto = booking.userPhoto || "";
+
+            try {
+              const response = await fetch(`/api/users/id/${encodeURIComponent(booking.userId)}`);
+              if (response.ok) {
+                const user = await response.json();
+                userName = user.name || user.username || userName;
+                userPhoto = user.photo || userPhoto;
+              }
+            } catch {
+              // Gunakan data snapshot booking jika profil user tidak tersedia.
+            }
+
+            return {
+              id: `booking_review_${booking.id}`,
+              talentId: booking.talentId,
+              userName,
+              userPhoto,
+              rating: booking.rating,
+              comment: booking.ratingComment || "",
+              date: booking.createdAt,
+            };
+          })
+        );
+
+        setUserReviews(reviewsWithUsers);
+      } catch (error) {
+        console.error("Gagal memuat ulasan user:", error);
+        setUserReviews([]);
+      }
+    };
+
+    void loadUserReviews();
+  }, [id]);
+
+  const talentReviews = userReviews;
+  const reviewCount = talentReviews.length;
+  const calculatedRating = useMemo(() => {
+    if (talentReviews.length === 0) return 0;
+    const sum = talentReviews.reduce((acc, r) => acc + Number(r.rating || 0), 0);
+    return Number((sum / talentReviews.length).toFixed(1));
+  }, [talentReviews]);
+
+  // Header & daftar ulasan memakai SATU sumber angka (talentReviews) agar
+  // tidak mungkin berbeda. displayReviewCount selalu == talentReviews.length.
+  const displayRating = reviewCount > 0 ? calculatedRating : talent?.rating ?? 0;
+  const displayReviewCount = reviewCount;
+
+  // Hanya sebagian ulasan yang dirender pada awalnya (performa).
+  const visibleReviews = useMemo(
+    () => talentReviews.slice(0, visibleReviewCount),
+    [talentReviews, visibleReviewCount]
+  );
+  const hasMoreReviews = visibleReviewCount < talentReviews.length;
+  const remainingReviewCount = talentReviews.length - visibleReviewCount;
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -86,6 +187,54 @@ export default function TalentDetail() {
       minimumFractionDigits: 0,
     }).format(price);
   };
+
+  // Format tanggal aman: string tanpa jam (YYYY-MM-DD) di-parse sebagai UTC oleh
+  // JS sehingga bisa geser 1 hari di zona WIB. Tanggal tak valid ditampilkan ".".
+  const formatReviewDate = (value?: string) => {
+    if (!value) return "";
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  };
+
+  // Harga efektif; hindari menampilkan "Rp 0" saat data harga tidak tersedia.
+  const talentPrice =
+    (typeof talent?.price === "number" && talent.price > 0 ? talent.price : undefined) ??
+    (typeof talent?.pricePerHour === "number" && talent.pricePerHour > 0 ? talent.pricePerHour : undefined);
+
+  // Link booking memakai talentId bila tersedia (konsisten dengan store lain).
+  const bookingId = talent?.talentId || talent?.id;
+
+  const handleShare = useCallback(async () => {
+    if (!talent) return;
+    const shareData = {
+      title: `${talent.name} di Teman Acara`,
+      text: `Kenalan dengan ${talent.name}${talent.city ? ` dari ${talent.city}` : ""}!`,
+      url: window.location.href,
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(shareData.url);
+        toast({
+          title: "Tautan disalin",
+          description: "Bagikan tautan profil ini ke temanmu.",
+        });
+      }
+    } catch (err) {
+      // Pembatalan share oleh user (AbortError) bukan error yang perlu ditampilkan.
+      if ((err as Error)?.name !== "AbortError") {
+        console.error("Gagal membagikan profil talent:", err);
+      }
+    }
+  }, [talent, toast]);
 
   if (isLoading) {
     return (
@@ -138,7 +287,7 @@ export default function TalentDetail() {
             <Button variant="ghost" size="icon" onClick={() => setLiked(!liked)} aria-label={liked ? "Hapus dari favorit" : "Tambah ke favorit"}>
               <Heart className={`w-5 h-5 ${liked ? "fill-red-500 text-red-500" : ""}`} />
             </Button>
-            <Button variant="ghost" size="icon" aria-label="Bagikan">
+            <Button variant="ghost" size="icon" onClick={handleShare} aria-label="Bagikan">
               <Share2 className="w-5 h-5" />
             </Button>
           </div>
@@ -186,7 +335,7 @@ export default function TalentDetail() {
                   <Button variant="ghost" size="icon" onClick={() => setLiked(!liked)} aria-label={liked ? "Hapus dari favorit" : "Tambah ke favorit"}>
                     <Heart className={`w-5 h-5 ${liked ? "fill-red-500 text-red-500" : ""}`} />
                   </Button>
-                  <Button variant="ghost" size="icon" aria-label="Bagikan">
+                  <Button variant="ghost" size="icon" onClick={handleShare} aria-label="Bagikan">
                     <Share2 className="w-5 h-5" />
                   </Button>
                 </div>
@@ -199,8 +348,8 @@ export default function TalentDetail() {
                 </div>
                 <div className="flex items-center gap-1">
                   <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                  <span className="font-semibold">{talent.rating || 0}</span>
-                  <span className="text-muted-foreground">({talent.reviewCount || 0} ulasan)</span>
+                  <span className="font-semibold">{displayRating}</span>
+                  <span className="text-muted-foreground">({displayReviewCount} ulasan)</span>
                 </div>
               </div>
             </div>
@@ -212,9 +361,9 @@ export default function TalentDetail() {
                   <p className="text-sm text-muted-foreground">Mulai dari</p>
                   <div className="flex items-baseline gap-1">
                     <span className="text-3xl font-bold text-primary">
-                      {formatPrice(talent.price || talent.pricePerHour || 0)}
+                      {talentPrice ? formatPrice(talentPrice) : "Harga belum tersedia"}
                     </span>
-                    <span className="text-muted-foreground">/jam</span>
+                    {talentPrice && <span className="text-muted-foreground">/jam</span>}
                   </div>
                 </div>
                 <Badge variant={talent.availability === "online" ? "accent" : talent.availability === "offline" ? "secondary" : "success"} className="text-sm px-4 py-2">
@@ -232,7 +381,7 @@ export default function TalentDetail() {
                 <p className="text-muted-foreground whitespace-pre-wrap">{talent.hobbies}</p>
               </div>
             )}
-            
+
             {!talent.hobbies && talent.skills && (
               <div>
                 <h3 className="font-semibold mb-3">Keahlian</h3>
@@ -270,7 +419,7 @@ export default function TalentDetail() {
 
             {/* CTA */}
             <div className="hidden md:block">
-              <Link to={`/booking/${talent.id}`}>
+              <Link to={`/booking/${bookingId}`}>
                 <Button variant="hero" size="xl" className="w-full">
                   Pesan Sekarang
                 </Button>
@@ -284,18 +433,18 @@ export default function TalentDetail() {
           <h2 className="text-2xl font-bold mb-6">Ulasan ({talentReviews.length})</h2>
           {talentReviews.length > 0 ? (
             <div className="grid md:grid-cols-2 gap-4">
-              {talentReviews.map((review) => (
+              {visibleReviews.map((review) => (
                 <Card key={review.id} className="p-5">
                   <div className="flex items-center gap-3 mb-3">
-                    <img src={review.userPhoto} alt={review.userName} className="w-12 h-12 rounded-full object-cover" />
+                    <img
+                      src={review.userPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(review.userName)}&background=f3f4f6&color=6b7280`}
+                      alt={review.userName}
+                      className="w-12 h-12 rounded-full object-cover"
+                    />
                     <div className="flex-1">
                       <h4 className="font-semibold">{review.userName}</h4>
                       <p className="text-sm text-muted-foreground">
-                        {new Date(review.date).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "long",
-                          year: "numeric",
-                        })}
+                        {formatReviewDate(review.date)}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">
@@ -313,6 +462,29 @@ export default function TalentDetail() {
               <p className="text-muted-foreground">Belum ada ulasan</p>
             </Card>
           )}
+
+          {/* Tombol untuk memuat lebih banyak ulasan */}
+          {hasMoreReviews && (
+            <div className="mt-6 flex-col items-center gap-3 text-center">
+              <p className="text-sm text-muted-foreground">
+                Menampilkan {visibleReviews.length} dari {talentReviews.length} ulasan
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setVisibleReviewCount((c) => c + 6)}
+                >
+                  Tampilkan 6 lagi ({remainingReviewCount} sisa)
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => setVisibleReviewCount(talentReviews.length)}
+                >
+                  Lihat semua ulasan
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -322,11 +494,11 @@ export default function TalentDetail() {
           <div>
             <p className="text-sm text-muted-foreground">Mulai dari</p>
             <p className="text-xl font-bold text-primary">
-              {formatPrice(talent.price || talent.pricePerHour || 0)}
-              <span className="text-sm font-normal text-muted-foreground">/jam</span>
+              {talentPrice ? formatPrice(talentPrice) : "- -"}
+              {talentPrice && <span className="text-sm font-normal text-muted-foreground">/jam</span>}
             </p>
           </div>
-          <Link to={`/booking/${talent.id}`}>
+          <Link to={`/booking/${bookingId}`}>
             <Button variant="hero" size="lg">
               Pesan Sekarang
             </Button>

@@ -1,9 +1,40 @@
 // src/lib/chatStore.ts
-import { supabase } from "./supabase";
+
 import { getBookings, refreshBookingsFromSupabase, SharedBooking } from "./bookingStore";
 import { talents } from "@/data/mockData";
 
+// Cache foto terbaru dari API agar foto yang sudah diperbarui admin langsung terpakai
+let latestTalentPhotoMap: Record<string, string> = {};
+async function refreshTalentPhotoMap() {
+  try {
+    const res = await fetch('/api/talents');
+    if (!res.ok) return;
+    const data = await res.json();
+    data.forEach((t: any) => {
+      if (t.user_id && t.photo) latestTalentPhotoMap[t.user_id] = t.photo;
+    });
+  } catch { /* silent */ }
+}
+if (typeof window !== 'undefined') void refreshTalentPhotoMap();
+
 export type MessageStatus = "sent" | "delivered" | "read";
+
+// Server MySQL memakai opsi `dateStrings: true`, sehingga kolom DATETIME
+// dikembalikan sebagai string tanpa info timezone, contoh: "2026-09-19 06:22:00".
+// String tersebut sebenarnya waktu UTC. `new Date("2026-09-19 06:22:00")` di
+// browser dianggap waktu LOKAL, sehingga jam tampil meleset (mis. -7 jam untuk WIB).
+// Helper ini menormalkan string DB agar di-parse sebagai UTC.
+export function parseServerDate(value: string | Date | null | undefined): Date {
+  if (value instanceof Date) return value;
+  if (!value) return new Date();
+  const str = String(value).trim();
+  // Sudah punya info timezone (ISO dengan Z atau offset) -> biarkan apa adanya.
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(str)) return new Date(str);
+  // Format "YYYY-MM-DD HH:mm:ss" (kemungkinan UTC dari MySQL) -> paksa UTC.
+  const normalized = str.replace(" ", "T") + "Z";
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? new Date(str) : parsed;
+}
 
 export interface ChatMessage {
   id: string;
@@ -47,7 +78,7 @@ export interface ChatSession {
 
 const STORAGE_KEY = "rentmate_chats";
 const STORAGE_VERSION_KEY = "rentmate_chats_version";
-const CURRENT_VERSION = "v3";
+const CURRENT_VERSION = "v4";
 
 function loadChatsFromStorage(): ChatSession[] {
   if (typeof window === "undefined") return [];
@@ -84,35 +115,18 @@ function ensureChatsFresh() {
 // ============================================================
 export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
   try {
-    const { data: chatRows, error: chatError } = await supabase
-      .from("chats")
-      .select("*");
+    const response = await fetch('/api/chats');
+    if (!response.ok) return cachedChats;
+    const { chats: chatRows, messages: messageRows } = await response.json();
 
-    if (chatError) {
-      console.error("Error fetching chats:", chatError);
-      return cachedChats;
-    }
     if (!chatRows || chatRows.length === 0) return cachedChats;
 
-    // Ambil semua pesan sekaligus berdasarkan chat_id
-    const chatIds = chatRows.map((row: any) => row.id).filter(Boolean);
     const messagesByChatId: Record<string, any[]> = {};
-
-    if (chatIds.length > 0) {
-      const { data: messageRows, error: messageError } = await supabase
-        .from("messages")
-        .select("*")
-        .in("chat_id", chatIds)
-        .order("created_at", { ascending: true });
-
-      if (messageError) {
-        console.error("Error fetching messages:", messageError);
-      } else if (messageRows) {
-        messageRows.forEach((m: any) => {
-          if (!messagesByChatId[m.chat_id]) messagesByChatId[m.chat_id] = [];
-          messagesByChatId[m.chat_id].push(m);
-        });
-      }
+    if (messageRows) {
+      messageRows.forEach((m: any) => {
+        if (!messagesByChatId[m.chat_id]) messagesByChatId[m.chat_id] = [];
+        messagesByChatId[m.chat_id].push(m);
+      });
     }
 
     // Pastikan bookings ter-load
@@ -122,10 +136,17 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
     }
 
     // Build/update sessions
-    chatRows.forEach((row: any) => {
+    chatRows
+      .filter((row: any) => {
+        const booking = bookings.find((b) => b.id === row.booking_id);
+          return booking && (booking.approvalStatus === "approved" || booking.approvalStatus === "completed");
+      })
+      .forEach((row: any) => {
       const booking = bookings.find((b) => b.id === row.booking_id);
       const talent = talents.find((t) => t.id === row.talent_id);
       const existing = cachedChats.find((s) => s.bookingId === row.booking_id);
+      // Gunakan foto terbaru dari API jika tersedia
+      const freshTalentPhoto = latestTalentPhotoMap[row.talent_id];
 
       // Map messages dari DB
       const dbMessages: ChatMessage[] = (messagesByChatId[row.id] || []).map((m: any) => ({
@@ -133,7 +154,8 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
         senderId: m.sender_id,
         senderType: m.sender_type as "user" | "talent" | "mitra-as-booker",
         message: m.message,
-        timestamp: m.created_at,
+        // created_at dari MySQL (UTC, tanpa timezone) -> normalkan agar di-parse UTC.
+        timestamp: parseServerDate(m.created_at).toISOString(),
         status: (m.status as MessageStatus) || "sent",
         readByUser: true,
         readByMitra: true,
@@ -165,7 +187,7 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
         userPhoto: booking?.userPhoto || "",
         talentId: row.talent_id,
         talentName: talent?.name || booking?.talentName || "Talent",
-        talentPhoto: talent?.photo || booking?.talentPhoto || "",
+        talentPhoto: freshTalentPhoto || talent?.photo || booking?.talentPhoto || "",
         purpose: booking?.purpose || "",
         duration: booking?.duration || 1,
         date: booking?.date || "",
@@ -175,9 +197,11 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
         lastMessage:
           row.last_message ||
           (merged.length > 0 ? merged[merged.length - 1].message : ""),
-        lastMessageTime:
-          row.last_message_time ||
-          (merged.length > 0 ? merged[merged.length - 1].timestamp : new Date().toISOString()),
+        lastMessageTime: row.last_message_time
+          ? parseServerDate(row.last_message_time).toISOString()
+          : merged.length > 0
+            ? merged[merged.length - 1].timestamp
+            : new Date().toISOString(),
         unreadCount: existing?.unreadCount ?? 0,
         unreadCountForUser: existing?.unreadCountForUser ?? 0,
         unreadCountForMitra: existing?.unreadCountForMitra ?? 0,
@@ -215,56 +239,35 @@ async function saveMessageToSupabase(
   lastMsgTime: string
 ) {
   try {
-    // --- Step 1: Ambil atau buat baris chat ---
-    let { data: chatRow } = await supabase
-      .from("chats")
-      .select("id")
-      .eq("booking_id", bookingId)
-      .maybeSingle();
-
-    if (!chatRow) {
-      const { data: inserted, error: insertErr } = await supabase
-        .from("chats")
-        .insert({
-          booking_id: bookingId,
-          user_id: userId,
-          talent_id: talentId,
-          last_message: lastMsgText,
-          last_message_time: lastMsgTime,
-        })
-        .select("id")
-        .single();
-
-      if (insertErr || !inserted) {
-        console.error("Error creating chat row:", insertErr);
-        return;
-      }
-      chatRow = inserted;
-    } else {
-      // Update last_message di baris yang sudah ada
-      await supabase
-        .from("chats")
-        .update({ last_message: lastMsgText, last_message_time: lastMsgTime })
-        .eq("id", chatRow.id);
-    }
-
-    const chatId = chatRow.id;
-
-    // --- Step 2: Insert pesan ---
-    const { error: msgErr } = await supabase.from("messages").insert({
-      id: newMessage.id,
-      chat_id: chatId,
-      sender_id: newMessage.senderId,
-      sender_type: newMessage.senderType,
-      message: newMessage.message,
-      status: newMessage.status,
-      created_at: newMessage.timestamp,
+    // --- Step 1 & 2: Update/Create Chat and Insert Message ---
+    const chatRes = await fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_id: bookingId,
+        user_id: userId,
+        talent_id: talentId,
+        last_message: lastMsgText,
+        last_message_time: lastMsgTime
+      })
     });
+    if (!chatRes.ok) return;
+    const chatData = await chatRes.json();
+    const chatId = chatData.id;
 
-    if (msgErr) {
-      console.error("Error inserting message:", msgErr);
-      return;
-    }
+    await fetch('/api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: newMessage.id,
+        chat_id: chatId,
+        sender_id: newMessage.senderId,
+        sender_type: newMessage.senderType,
+        message: newMessage.message,
+        status: newMessage.status,
+        created_at: newMessage.timestamp
+      })
+    });
 
     // --- Step 3: Refresh cache dan broadcast ---
     await fetchChatsFromSupabase();
@@ -281,12 +284,13 @@ async function saveMessageToSupabase(
 // 3. getOrCreateChatSession
 // ============================================================
 export function getOrCreateChatSession(booking: SharedBooking): ChatSession | null {
-  if (booking.approvalStatus !== "approved") return null;
+  if (booking.approvalStatus !== "approved" && booking.approvalStatus !== "completed") return null;
 
   let session = cachedChats.find((s) => s.bookingId === booking.id);
   if (session) return session;
 
   const talent = talents.find((t) => t.id === booking.talentId);
+  const freshPhoto = latestTalentPhotoMap[booking.talentId];
   const welcomeMessage = `Halo! Terima kasih sudah booking untuk ${booking.purpose}. Yuk kita koordinasi 😊`;
   const now = new Date().toISOString();
   const msgId = crypto.randomUUID();
@@ -299,7 +303,7 @@ export function getOrCreateChatSession(booking: SharedBooking): ChatSession | nu
     userPhoto: booking.userPhoto || "",
     talentId: booking.talentId,
     talentName: talent?.name || booking.talentName || "Talent",
-    talentPhoto: talent?.photo || booking.talentPhoto || "",
+    talentPhoto: freshPhoto || talent?.photo || booking.talentPhoto || "",
     purpose: booking.purpose,
     duration: booking.duration,
     date: booking.date,
@@ -361,7 +365,24 @@ export function getChatSessionByBookingId(bookingId: string): ChatSession | null
 // ============================================================
 export function getChatSessionsForTalent(talentId: string): ChatSession[] {
   if (!talentId) return [];
-  return cachedChats.filter((s) => s.talentId === talentId);
+  const bookings = getBookings();
+
+  // Setiap booking approved harus memiliki percakapan, meskipun sesi chat
+  // belum pernah dibuka atau belum tersimpan di cache browser.
+  bookings
+    .filter((booking) =>
+      booking.talentId === talentId &&
+      (booking.approvalStatus === "approved" || booking.approvalStatus === "completed")
+    )
+    .forEach((booking) => getOrCreateChatSession(booking));
+
+  return cachedChats.filter((s) =>
+    s.talentId === talentId &&
+    bookings.some((booking) =>
+      booking.id === s.bookingId &&
+      (booking.approvalStatus === "approved" || booking.approvalStatus === "completed")
+    )
+  );
 }
 
 export function getChatSessionsForMitraAsBooker(mitraId: string): ChatSession[] {
@@ -458,6 +479,12 @@ export function sendUserMessage(
 
   persistChatsToStorage(cachedChats);
 
+  // Broadcast lokal agar pesan yang baru dikirim langsung tampil (optimistic UI),
+  // tidak perlu menunggu polling 3 detik.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("chatsUpdated"));
+  }
+
   void saveMessageToSupabase(
     bookingId,
     session.userId,
@@ -492,6 +519,9 @@ export function markMessagesAsReadByUser(bookingId: string) {
   const session = cachedChats.find((s) => s.bookingId === bookingId);
   if (!session) return;
   session.unreadCountForUser = 0;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("chatsUpdated"));
+  }
 }
 
 export function setUserTyping(_bookingId: string, _isTyping: boolean) {}
@@ -507,26 +537,15 @@ export function subscribeToChats(callback: () => void) {
 
   window.addEventListener("chatsUpdated", callback);
 
-  const channel = supabase
-    .channel("public:messages_realtime")
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "messages" },
-      async () => {
-        await fetchChatsFromSupabase();
-        callback();
-      }
-    )
-    .subscribe();
-
+  // Polling ringan untuk pesan masuk dari lawan bicara.
+  // Pesan yang kita kirim sendiri tampil instan lewat event "chatsUpdated".
   const interval = setInterval(async () => {
     await fetchChatsFromSupabase();
     callback();
-  }, 3000);
+  }, 1500);
 
   return () => {
     window.removeEventListener("chatsUpdated", callback);
-    supabase.removeChannel(channel);
     clearInterval(interval);
   };
 }

@@ -17,33 +17,36 @@ export default function AdminLogin() {
   });
 
 const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
+  e.preventDefault();
+  setIsLoading(true);
 
-    // Simulasi jeda loading agar terasa natural (1 detik)
-    setTimeout(() => {
-      // Validasi ketat: email dan password harus spesifik, tidak boleh asal isi
-      const validEmail = "admin@rentmate.com";
-      const validPassword = "adminpassword123"; // Bisa kamu ubah nanti
+  try {
+    const response = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(credentials),
+    });
 
-      if (credentials.email === validEmail && credentials.password === validPassword) {
-        // Set admin session
-        sessionStorage.setItem("adminAuthenticated", "true");
-        toast({
-          title: "Login Berhasil",
-          description: "Selamat datang di Admin Dashboard",
-        });
-        navigate("/admin");
-      } else {
-        toast({
-          title: "Login Gagal",
-          description: "Email atau password admin salah!",
-          variant: "destructive",
-        });
-      }
-      setIsLoading(false);
-    }, 1000);
-  };
+    if (!response.ok) {
+      throw new Error("Email atau password admin salah!");
+    }
+
+    sessionStorage.setItem("adminAuthenticated", "true");
+    toast({
+      title: "Login Berhasil",
+      description: "Selamat datang di Admin Dashboard",
+    });
+    navigate("/admin");
+  } catch (error) {
+    toast({
+      title: "Login Gagal",
+      description: error instanceof Error ? error.message : "Server tidak tersedia.",
+      variant: "destructive",
+    });
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-gradient-warm flex items-center justify-center p-4">

@@ -46,6 +46,7 @@ import MitraVerificationPage from "./pages/mitra/verification";
 // ADMIN
 import AdminLogin from "./pages/AdminLogin";
 import Admin from "./pages/Admin";
+import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
@@ -81,16 +82,16 @@ export default function App() {
             {/* MITRA ROUTES */}
             <Route path="/mitra" element={<MitraLayout />}>
               <Route index element={<MitraLandingPage />} />
-              <Route path="pengaturan" element={<Pengaturan />} />
+              <Route path="pengaturan" element={<ProtectedRoute type="mitra"><Pengaturan /></ProtectedRoute>} />
               <Route path="tentang" element={<MitraLandingPage />} />
               <Route path="aktivitas" element={<MitraLandingPage />} />
               <Route path="keuntungan" element={<MitraLandingPage />} />
               <Route path="cara-bergabung" element={<MitraLandingPage />} />
               <Route path="login" element={<MitraLoginPage />} />
               <Route path="register" element={<MitraRegisterPage />} />
-              <Route path="dashboard" element={<MitraDashboard />} />
-              <Route path="chat" element={<MitraChatPage />} />
-              <Route path="chat/:bookingId" element={<MitraChatPage />} />
+              <Route path="dashboard" element={<ProtectedRoute type="mitra"><MitraDashboard /></ProtectedRoute>} />
+              <Route path="chat" element={<ProtectedRoute type="mitra"><MitraChatPage /></ProtectedRoute>} />
+              <Route path="chat/:bookingId" element={<ProtectedRoute type="mitra"><MitraChatPage /></ProtectedRoute>} />
               <Route path="claim-profile" element={<MitraClaimProfilePage />} />
               <Route path="talents" element={<MitraTalents />} />
               <Route path="talents/:id" element={<MitraTalentDetail />} /> 
@@ -100,17 +101,21 @@ export default function App() {
               <Route path="privacy" element={<MitraPrivacy />} />
               <Route path="help" element={<MitraHelp />} />
               <Route path="report" element={<MitraReport />} />
-              <Route path="chat-as-booker/:bookingId" element={<MitraAsBookerChatPage />} />
-              <Route path="bookings" element={<MitraBookingsPage />} />
+              <Route path="chat-as-booker/:bookingId" element={<ProtectedRoute type="mitra"><MitraAsBookerChatPage /></ProtectedRoute>} />
+              <Route path="bookings" element={<ProtectedRoute type="mitra"><MitraBookingsPage /></ProtectedRoute>} />
               <Route path="verification" element={<MitraVerificationPage />} />
             </Route>
 
             {/* ADMIN ROUTES */}
             <Route path="/admin-login" element={<AdminLogin />} />
-            <Route path="/admin" element={<Admin />} />
+            <Route path="/admin" element={
+              <ProtectedRoute type="admin">
+                <Admin />
+              </ProtectedRoute>
+            } />
 
-            {/* FALLBACK */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* FALLBACK 404 */}
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>

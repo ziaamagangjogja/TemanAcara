@@ -1,6 +1,6 @@
-// src/lib/mitraStore.ts
+﻿// src/lib/mitraStore.ts
 
-import { supabase } from "@/lib/supabase";
+
 import {
   MitraAccount,
   MitraRegistrationData,
@@ -67,7 +67,13 @@ export function getCurrentMitra() {
     
     const mitra = JSON.parse(mitraData);
     
-    const userName = mitra.user_metadata?.name || mitra.name || mitra.email || 'Mitra';
+    // Nama: prioritaskan nama asli. `full_name` berasal dari tabel profiles DB.
+    // Jangan pakai email sebagai nama tampilan.
+    const userName =
+      mitra.user_metadata?.name ||
+      mitra.name ||
+      mitra.full_name ||
+      'Mitra';
     
     const isAuthenticated = localStorage.getItem("mitraAuthenticated");
     if (!isAuthenticated) {
@@ -81,7 +87,23 @@ export function getCurrentMitra() {
       return null;
     }
     
-    return { ...mitra, name: userName, talentId };
+    // Normalisasi status verifikasi agar konsisten.
+    // Data lama mungkin belum punya `verificationStatus`; pakai `status` sebagai fallback.
+    const rawStatus = mitra.verificationStatus || mitra.status;
+    const verificationStatus =
+      rawStatus === "approved"
+        ? "approved"
+        : rawStatus === "rejected"
+        ? "rejected"
+        : "pending";
+
+    return {
+      ...mitra,
+      name: userName,
+      talentId,
+      verificationStatus,
+      isVerified: verificationStatus === "approved",
+    };
   } catch (error) {
     console.error("Error getting current mitra:", error);
     return null;
@@ -187,45 +209,57 @@ export function rejectMitra(mitraId: string) {
 /* ================= TALENT DISPLAY ================= */
 export async function getAllVerifiedTalents() {
   try {
-    const { data: approvedTalents, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('status', 'approved');
-
-    if (error) {
-      console.error("Error fetching approved talents from Supabase:", error);
+    const response = await fetch('/api/talents');
+    if (!response.ok) {
+      console.error("Error fetching approved talents from API");
       return talents.map(t => ({ ...t, isLegacy: true, talentId: t.id }));
     }
+    const approvedTalents = await response.json();
 
-    const formattedNewTalents = approvedTalents.map((mitra: any) => ({
-      id: mitra.user_id,
-      talentId: mitra.user_id,
-      name: mitra.full_name,
-      photo: mitra.photo,
-      city: mitra.address || 'Tidak diketahui',
-      category: mitra.category || 'Lainnya',
-      description: mitra.description || '',
-      rating: 0,
-      price: mitra.price || 0,
-      pricePerHour: mitra.price || 0,
-      availability: 'online & offline',
-      isVerified: true,
-      isLegacy: false,
-      age: mitra.age,
-      email: mitra.email,
-      phone: mitra.phone,
-      skills: mitra.skills || [],
-    }));
+    const formattedNewTalents = approvedTalents.map((mitra: any) => {
+      const targetId = mitra.user_id || mitra.id;
+      const mockTalent = talents.find(t => t.id === targetId || t.email === mitra.email);
+      
+      const seedNum = (targetId || "").split("").reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
+      const defaultRating = mockTalent?.rating || Number((4.7 + (seedNum % 3) * 0.1).toFixed(1));
+      const defaultReviewCount = mockTalent?.reviewCount || (5 + (seedNum % 4));
 
-    const formattedLegacyTalents = talents.map(t => ({ 
+      return {
+        id: targetId,
+        talentId: targetId,
+        name: mitra.full_name || mitra.name || mockTalent?.name || 'Mitra Baru',
+        photo: mitra.photo || mockTalent?.photo || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(mitra.full_name || mitra.name || 'Talent')}`,
+        city: mitra.address || mockTalent?.city || 'Indonesia',
+        category: mitra.category || mockTalent?.skills?.[0] || 'Teman Acara',
+        description: mitra.description || mockTalent?.bio || 'Siap menemani acara kamu.',
+        rating: defaultRating,
+        reviewCount: defaultReviewCount,
+        price: (mitra.price && Number(mitra.price) > 0) ? Number(mitra.price) : (mockTalent?.pricePerHour || 250000),
+        pricePerHour: (mitra.price && Number(mitra.price) > 0) ? Number(mitra.price) : (mockTalent?.pricePerHour || 250000),
+        availability: 'both',
+        isVerified: true,
+        isLegacy: false,
+        age: (mitra.age && Number(mitra.age) > 0) ? Number(mitra.age) : (mockTalent?.age || 23),
+        email: mitra.email,
+        phone: mitra.phone || '',
+        skills: (mitra.category && mitra.category.trim())
+          ? mitra.category.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : (mockTalent?.skills || ['Teman Acara']),
+        status: mitra.status || 'approved',
+      };
+    });
+
+    if (formattedNewTalents.length > 0) {
+      return formattedNewTalents;
+    }
+
+    return talents.map(t => ({ 
       ...t, 
       isLegacy: true,
       talentId: t.id,
       email: t.email,
       skills: t.skills || [],
     }));
-
-    return [...formattedNewTalents, ...formattedLegacyTalents];
 
   } catch (error) {
     console.error("Gagal memuat data talent:", error);
@@ -360,9 +394,21 @@ export async function loginMitra(data: MitraLoginData): Promise<any> {
     const userWithTalentId = {
       ...result.user,
       talentId: result.user.talentId || result.user.id || result.user.user_id,
+      name: result.user?.full_name || result.user?.name || "Mitra",
+      full_name: result.user?.full_name || result.user?.name || "Mitra",
+      email: result.user?.email || "",
+      photo: result.user?.photo || "",
+      city: result.user?.address || result.user?.city || "",
       isOnline: true,
       lastActive: new Date().toISOString(),
       isLegacyTalent: false,
+      verificationStatus:
+        result.user?.status === "approved"
+          ? "approved"
+          : result.user?.status === "rejected"
+          ? "rejected"
+          : "pending",
+      isVerified: result.user?.status === "approved",
     };
     
     localStorage.setItem("rentmate_current_mitra", JSON.stringify(userWithTalentId));
@@ -390,7 +436,7 @@ export function logoutMitra() {
 }
 
 /* ================= APPROVE ================= */
-export async function approveMitra(mitraId: string, mitraEmail: string, mitraName: string) {
+export async function approveMitra(mitraId: string, mitraEmail: string, mitraName: string, price?: number) {
   console.log(`Menyetujui mitra ${mitraEmail} dan mengirim email.`);
   try {
     const response = await fetch('/send-approval', {
@@ -399,6 +445,7 @@ export async function approveMitra(mitraId: string, mitraEmail: string, mitraNam
       body: JSON.stringify({
         talentEmail: mitraEmail,
         talentName: mitraName,
+        price,
         loginLink: `${window.location.origin}/mitra/login`
       }),
     });
@@ -415,6 +462,55 @@ export async function approveMitra(mitraId: string, mitraEmail: string, mitraNam
   } catch (error: any) {
     console.error('Error approving mitra:', error);
     throw new Error(error.message || 'Gagal menghubungi server untuk persetujuan.');
+  }
+}
+
+/* ================= UPDATE TALENT PRICE (ADMIN) ================= */
+export async function updateTalentPrice(talentId: string, price: number): Promise<boolean> {
+  return updateTalentProfile(talentId, { price });
+}
+
+/* ================= UPDATE TALENT PROFILE (ADMIN) ================= */
+export async function updateTalentProfile(
+  talentId: string,
+  data: {
+    name?: string;
+    photo?: string;
+    city?: string;
+    category?: string;
+    description?: string;
+    price?: number;
+    phone?: string;
+    age?: number;
+  }
+): Promise<boolean> {
+  try {
+    // Kirim hanya field yang terisi (tidak undefined) agar field lain tidak terhapus.
+    const payload: Record<string, unknown> = {};
+    if (data.name !== undefined) payload.full_name = data.name;
+    if (data.photo !== undefined) payload.photo = data.photo;
+    if (data.city !== undefined) payload.address = data.city;
+    if (data.category !== undefined) payload.category = data.category;
+    if (data.description !== undefined) payload.description = data.description;
+    if (data.price !== undefined) payload.price = data.price;
+    if (data.phone !== undefined) payload.phone = data.phone;
+    if (data.age !== undefined) payload.age = data.age;
+
+    const response = await fetch(`/api/talents/${talentId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || 'Gagal memperbarui data talent.');
+    }
+    window.dispatchEvent(new CustomEvent('talentListUpdated'));
+    window.dispatchEvent(new CustomEvent('mitraVerificationUpdated'));
+    return true;
+  } catch (error) {
+    console.error('Error updating talent profile:', error);
+    throw error;
   }
 }
 
@@ -474,10 +570,10 @@ export const getMitraBookings = (mitraId: string) => {
 };
 
 /* ================= TOTAL USERS ================= */
-export function getTotalUsers() {
-  const allTalents = getAllVerifiedTalents();
+export async function getTotalUsers() {
+  const allTalents = await getAllVerifiedTalents();
   const currentUser = getCurrentUser();
-  return allTalents.length + (currentUser ? 1 : 0);
+  return (Array.isArray(allTalents) ? allTalents.length : 0) + (currentUser ? 1 : 0);
 }
 
 /* ================= UPDATE MITRA PROFILE ================= */
@@ -504,20 +600,24 @@ export async function updateMitraProfile(data: {
     localStorage.setItem("rentmate_current_mitra", JSON.stringify(updatedMitra));
     
     if (!currentMitra.isLegacyTalent) {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          full_name: data.name,
-          photo: data.photo,
-          address: data.city,
-          category: data.category,
-          description: data.description,
-          price: data.price,
-        })
-        .eq('user_id', currentMitra.talentId);
+      // Bangun payload hanya dari field yang benar-benar diisi (partial update),
+      // agar field lain di database tidak tertimpa menjadi kosong.
+      const payload: Record<string, unknown> = {};
+      if (data.name !== undefined) payload.full_name = data.name;
+      if (data.photo !== undefined) payload.photo = data.photo;
+      if (data.city !== undefined) payload.address = data.city;
+      if (data.category !== undefined) payload.category = data.category;
+      if (data.description !== undefined) payload.description = data.description;
+      if (data.price !== undefined) payload.price = data.price;
+
+      const response = await fetch(`/api/talents/${currentMitra.talentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
         
-      if (error) {
-        throw error;
+      if (!response.ok) {
+        throw new Error('Gagal update profile di server');
       }
     }
     

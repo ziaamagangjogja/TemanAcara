@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+/* Font dimuat lewat <link> di index.html (non-blocking).
+   Jangan pakai @import di sini karena dapat menahan render (blank putih)
+   saat jaringan ke Google Fonts lambat/terblokir.
+   Font sistem dipakai sebagai fallback instan. */
 
 @tailwind base;
 @tailwind components;
@@ -108,7 +111,10 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    /* Font sistem diutamakan agar render tidak pernah menunggu font remote.
+       Jika Plus Jakarta Sans berhasil dimuat, ia akan tetap terpakai
+       berkat font-display: swap dari Google Fonts. */
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Plus Jakarta Sans', Arial, sans-serif;
   }
 }
 

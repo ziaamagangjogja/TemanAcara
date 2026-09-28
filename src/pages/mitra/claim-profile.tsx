@@ -61,7 +61,7 @@ export default function MitraRegisterPage() {
         password: password,
         name: selectedTalent.name,
         photo: selectedTalent.photo,
-        talentId: selectedTalentId, // INI YANG TERPENTING
+        talentId: selectedTalentId,
         phone: "",
       });
       

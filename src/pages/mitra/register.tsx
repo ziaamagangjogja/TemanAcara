@@ -2,7 +2,7 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload } from "lucide-react";
+import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +21,7 @@ export default function MitraRegister() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
 
@@ -189,12 +190,18 @@ export default function MitraRegister() {
         // Harga tidak disertakan karena akan ditentukan oleh admin
       });
 
+      // Bersihkan sesi mitra lama agar tidak otomatis diarahkan ke dashboard mitra
+      localStorage.removeItem("mitraAuthenticated");
+      localStorage.removeItem("rentmate_current_mitra");
+
       toast({
         title: "Registrasi Berhasil 🎉",
         description: "Akun Anda telah dibuat dan sedang menunggu verifikasi admin. Anda akan menerima email dalam 1x24 jam.",
       });
 
-      navigate("/mitra/login");
+      // Tampilkan halaman sukses, bukan langsung login/redirect
+      setIsSuccess(true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err: any) {
       toast({
         title: "Registrasi Gagal",
@@ -205,6 +212,32 @@ export default function MitraRegister() {
       setIsLoading(false);
     }
   };
+
+  if (isSuccess) {
+    return (
+      <div className="min-h-screen bg-gradient-warm flex items-center justify-center p-4">
+        <Card className="w-full max-w-md p-8 text-center">
+          <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="w-8 h-8 text-green-600" />
+          </div>
+          <h1 className="text-2xl font-bold mb-2">Pendaftaran Berhasil 🎉</h1>
+          <p className="text-muted-foreground text-sm mb-6">
+            Akun Anda sudah terkirim dan sedang menunggu verifikasi admin (maksimal 1x24 jam).
+            Harga akan ditentukan oleh admin setelah verifikasi disetujui.
+          </p>
+
+          <div className="space-y-2">
+            <Button className="w-full" onClick={() => navigate("/")}>
+              Kembali ke Beranda
+            </Button>
+            <Button variant="outline" className="w-full" onClick={() => navigate("/mitra/login")}>
+              Ke Halaman Login Talent
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-warm flex items-center justify-center p-4">

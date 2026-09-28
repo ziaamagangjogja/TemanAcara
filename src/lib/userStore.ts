@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+
 
 export interface UserProfile {
   id: string;
@@ -33,16 +33,12 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
     const username = localStorage.getItem(STORAGE_KEY);
     if (!username) return null; // Benar-benar kosong jika tidak ada yang login
 
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("username", username)
-      .single();
-
-    if (error || !data) {
+    const response = await fetch(`/api/users/${username}`);
+    if (!response.ok) {
       localStorage.removeItem(STORAGE_KEY);
       return null;
     }
+    const data = await response.json();
 
     return {
       id: data.id,
@@ -68,9 +64,10 @@ export async function updateCurrentUser(updates: Partial<UserProfile>): Promise<
   const username = localStorage.getItem(STORAGE_KEY);
   if (!username) return null;
 
-  const { error } = await supabase
-    .from("users")
-    .update({
+  const response = await fetch(`/api/users/${username}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       name: updates.name,
       email: updates.email,
       phone: updates.phone,
@@ -81,9 +78,9 @@ export async function updateCurrentUser(updates: Partial<UserProfile>): Promise<
       photo: updates.photo,
       wallet: updates.wallet,
     })
-    .eq("username", username);
+  });
 
-  if (error) return null;
+  if (!response.ok) return null;
 
   window.dispatchEvent(new CustomEvent("userUpdated"));
   return await getCurrentUser();

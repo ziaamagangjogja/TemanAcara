@@ -73,6 +73,16 @@ export interface Talent {
   skills: string[];
   bio: string;
   pricePerHour: number;
+  /** API talent fields used by the live backend response. */
+  price?: number;
+  talentId?: string;
+  category?: string;
+  phone?: string;
+  status?: string;
+  isVerified?: boolean;
+  isLegacy?: boolean;
+  isBlocked?: boolean;
+  blocked?: boolean;
   rating: number;
   reviewCount: number;
   rules: string[];
@@ -275,7 +285,7 @@ export const talents: Talent[] = [
     password: "anisarahma11",
     skills: ["Nonton Film", "Kopi", "Membaca"],
     bio: "Bookworm yang suka nongkrong di cafe! Teman ngobrol sambil ngopi atau nonton film.",
-    pricePerHour:210000,
+    pricePerHour: 210000,
     rating: 4.7,
     reviewCount: 73,
     rules: ["Hanya teman sosial", "Lokasi cafe atau bioskop"],
@@ -1088,7 +1098,7 @@ export const mockChatRooms: ChatRoom[] = [
 // Contextual chat responses based on message content
 export const getContextualResponse = (userMessage: string, talentName: string): string => {
   const message = userMessage.toLowerCase();
-  
+
   // Time/Schedule related
   if (message.includes("jam") || message.includes("waktu") || message.includes("kapan") || message.includes("schedule")) {
     const responses = [
@@ -1099,7 +1109,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Location related
   if (message.includes("dimana") || message.includes("lokasi") || message.includes("tempat") || message.includes("alamat") || message.includes("ketemu")) {
     const responses = [
@@ -1110,7 +1120,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Price/Payment related
   if (message.includes("harga") || message.includes("bayar") || message.includes("biaya") || message.includes("tarif")) {
     const responses = [
@@ -1120,7 +1130,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Activity related
   if (message.includes("ngapain") || message.includes("aktivitas") || message.includes("plan") || message.includes("acara")) {
     const responses = [
@@ -1131,7 +1141,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Greeting
   if (message.includes("halo") || message.includes("hai") || message.includes("hi") || message.includes("hey")) {
     const responses = [
@@ -1141,7 +1151,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Thank you
   if (message.includes("terima kasih") || message.includes("makasih") || message.includes("thanks")) {
     const responses = [
@@ -1151,7 +1161,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Confirmation
   if (message.includes("oke") || message.includes("ok") || message.includes("siap") || message.includes("deal")) {
     const responses = [
@@ -1162,7 +1172,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Food/Culinary
   if (message.includes("makan") || message.includes("kuliner") || message.includes("resto") || message.includes("cafe")) {
     const responses = [
@@ -1172,7 +1182,7 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
-  
+
   // Default responses
   const defaultResponses = [
     `Oke, noted! Ada lagi yang mau dibahas?`,
@@ -1185,4 +1195,4 @@ export const getContextualResponse = (userMessage: string, talentName: string): 
 };
 
 // Legacy export for backward compatibility
-export const mockChats: ChatMessage[] = mockChatRooms[0]?.messages || [];
+export const mockChats: ChatMessage[] = mockChatRooms[0]?.messages || []; 

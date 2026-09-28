@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Home, Users, Calendar, MessageCircle, User, Menu, X } from "lucide-react";
+import { Home, Users, Calendar, MessageCircle, User, Menu, X, HeartHandshake } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getCurrentUser, subscribeToUser, UserProfile } from "@/lib/userStore";
@@ -21,15 +21,26 @@ export function Navbar() {
   const { settings } = useAppSettings();
 
   useEffect(() => {
-    try {
-      setUser(getCurrentUser());
-      const unsubscribe = subscribeToUser(() => {
-        setUser(getCurrentUser());
-      });
-      return unsubscribe;
-    } catch (e) {
-      console.error(e);
-    }
+    let mounted = true;
+
+    const loadUser = async () => {
+      try {
+        const currentUser = await getCurrentUser();
+        if (mounted) setUser(currentUser);
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    void loadUser();
+    const unsubscribe = subscribeToUser(() => {
+      void loadUser();
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, []);
 
   const isAuthPage = location.pathname === "/login" || location.pathname === "/register";
@@ -70,13 +81,23 @@ export function Navbar() {
             })}
           </div>
 
-          {!displayUser && !isAuthPage && (
-            <Link to="/login">
-              <Button variant="hero" size="sm">
-                Masuk
-              </Button>
-            </Link>
-          )}
+          <div className="flex items-center gap-2">
+            {!isAuthPage && (
+              <Link to="/mitra">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <HeartHandshake className="w-4 h-4" />
+                  Jadi Mitra
+                </Button>
+              </Link>
+            )}
+            {!displayUser && !isAuthPage && (
+              <Link to="/login">
+                <Button variant="hero" size="sm">
+                  Masuk
+                </Button>
+              </Link>
+            )}
+          </div>
         </div>
       </nav>
 
@@ -105,6 +126,14 @@ export function Navbar() {
                   </Link>
                 );
               })}
+              {!isAuthPage && (
+                <Link to="/mitra" onClick={() => setMobileMenuOpen(false)}>
+                  <div className="flex items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary">
+                    <HeartHandshake className="w-5 h-5" />
+                    <span className="font-medium">Jadi Mitra</span>
+                  </div>
+                </Link>
+              )}
               {!displayUser && !isAuthPage && (
                 <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
                   <Button variant="hero" className="w-full mt-2">

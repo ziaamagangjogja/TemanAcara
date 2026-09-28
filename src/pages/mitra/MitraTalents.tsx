@@ -245,7 +245,7 @@ export default function MitraTalents() {
       filters.minAge !== 18 || 
       filters.maxAge !== 40;
     
-    setHasSearched(hasActiveFilters);
+    setHasSearched(Boolean(hasActiveFilters));
   }, [debouncedSearchQuery, filters]);
 
   // Optimized filtering function

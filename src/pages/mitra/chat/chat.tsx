@@ -10,7 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Send, Loader2, Check, CheckCheck } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Check, CheckCheck, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 import {
@@ -40,6 +40,10 @@ export default function MitraChatPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // STATE TAMBAHAN UNTUK COUNTDOWN TIMER REAL-TIME
+  const [timeLeft, setTimeLeft] = useState<string>("");
+  const [isBookingExpired, setIsBookingExpired] = useState<boolean>(false);
+
   // Dapatkan data mitra yang sedang login
   const currentMitra = getCurrentMitra();
 
@@ -55,10 +59,62 @@ export default function MitraChatPage() {
   }, [sessions, bookingId]);
 
   // ===============================
+  // FUNGSI COUNTDOWN / SISA WAKTU
+  // ===============================
+  useEffect(() => {
+    if (!activeChat || !activeChat.date || !activeChat.time) {
+      setTimeLeft("");
+      return;
+    }
+
+    const calculateTimeLeft = () => {
+      try {
+          const bookingDate = String(activeChat.date).slice(0, 10);
+          const bookingTime = String(activeChat.time).slice(0, 8);
+          const bookingDateTimeStr = `${bookingDate}T${bookingTime}`;
+        const startTimestamp = new Date(bookingDateTimeStr).getTime();
+          if (Number.isNaN(startTimestamp)) {
+            setTimeLeft("");
+            setIsBookingExpired(false);
+            return;
+          }
+        const durationHours = Number(activeChat.duration) || 1;
+        const endTimestamp = startTimestamp + durationHours * 60 * 60 * 1000;
+        
+        const now = new Date().getTime();
+        const difference = endTimestamp - now;
+
+        if (difference <= 0) {
+          setTimeLeft("Selesai (Waktu Habis)");
+          setIsBookingExpired(true);
+        } else {
+          setIsBookingExpired(false);
+          const hours = Math.floor((difference / (1000 * 60 * 60)) % 24);
+          const minutes = Math.floor((difference / 1000 / 60) % 60);
+          const seconds = Math.floor((difference / 1000) % 60);
+
+          if (hours > 0) {
+            setTimeLeft(`Sisa waktu: ${hours}j ${minutes}m`);
+          } else if (minutes > 0) {
+            setTimeLeft(`Sisa waktu: ${minutes}m ${seconds}s`);
+          } else {
+            setTimeLeft(`Sisa waktu: ${seconds}s`);
+          }
+        }
+      } catch (e) {
+        setTimeLeft("");
+      }
+    };
+
+    calculateTimeLeft();
+    const timer = setInterval(calculateTimeLeft, 1000);
+    return () => clearInterval(timer);
+  }, [activeChat]);
+
+  // ===============================
   // FUNGSI YANG DIBUNGKUS DENGAN useCallback
   // ===============================
 
-  // ✅ PERBAIKAN: Bungkus loadSessions dengan useCallback dan tambahkan logika "mark as read"
   const loadSessions = useCallback(() => {
     if (!currentMitra) return;
     console.log("MitraChat: Loading sessions for mitra ID:", currentMitra.talentId);
@@ -67,11 +123,9 @@ export default function MitraChatPage() {
     setSessions(talentSessions);
     setIsLoading(false);
 
-    // ✅ LOGIKA BARU: Setelah memuat sesi, periksa chat yang sedang aktif
     if (bookingId) {
       const currentActiveChat = talentSessions.find(s => s.bookingId === bookingId);
       if (currentActiveChat) {
-        // Cek apakah ada pesan dari user yang belum dibaca
         const hasUnreadMessages = currentActiveChat.messages.some(
           msg => msg.senderType === 'user' && !msg.readByMitra
         );
@@ -81,9 +135,8 @@ export default function MitraChatPage() {
         }
       }
     }
-  }, [currentMitra?.talentId, bookingId]); // Tambahkan bookingId ke dependency
+  }, [currentMitra?.talentId, bookingId]);
 
-  // PERBAIKAN: Bungkus scrollToBottom dengan useCallback
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
       scrollRef.current?.scrollTo({
@@ -91,12 +144,11 @@ export default function MitraChatPage() {
         behavior: "smooth",
       });
     }, 100);
-  }, []); // Tidak ada dependency, fungsi ini tidak akan pernah berubah
+  }, []);
 
-  // PERBAIKAN: Bungkus handleTyping dengan useCallback
   const handleTyping = useCallback((value: string) => {
     setMessage(value);
-    if (!activeChat) return; // Sekarang activeChat sudah terdefinisi
+    if (!activeChat) return;
 
     if (!isTyping) {
       setIsTyping(true);
@@ -108,23 +160,19 @@ export default function MitraChatPage() {
       setIsTyping(false);
       setTalentTyping(activeChat.bookingId, false);
     }, 800);
-  }, [activeChat?.bookingId, isTyping]); // Bergantung pada bookingId dan state isTyping
+  }, [activeChat?.bookingId, isTyping]);
 
-  // PERBAIKAN: Bungkus handleSend dengan useCallback
-// PERBAIKAN: Bungkus handleSend dengan useCallback dan pastikan store terpanggil dengan benar
   const handleSend = useCallback(async () => {
-    if (!activeChat || !message.trim()) return;
+    if (!activeChat || !message.trim() || isBookingExpired) return;
 
     const text = message.trim();
     setMessage("");
     setIsSending(true);
 
     try {
-      // Panggil sendMitraMessage karena ini halaman khusus Mitra
       const result = sendMitraMessage(activeChat.bookingId, text);
 
       if (result) {
-        // Panggil loadSessions secara manual seketika agar state langsung ter-update tanpa nunggu event luar
         loadSessions();
       } else {
         toast({
@@ -138,13 +186,12 @@ export default function MitraChatPage() {
     } finally {
       setIsSending(false);
     }
-  }, [activeChat, message, toast, loadSessions]);
+  }, [activeChat, message, toast, loadSessions, isBookingExpired]);
 
   // ===============================
   // EFFECTS
   // ===============================
 
-  // PERBAIKAN: Gunakan ID mitra sebagai dependency, bukan seluruh objek
   useEffect(() => {
     if (!currentMitra) {
       navigate('/mitra/login');
@@ -160,7 +207,6 @@ export default function MitraChatPage() {
     void init();
   }, [currentMitra?.id, navigate, loadSessions]);
 
-  // PERBAIKAN: Gunakan ID mitra sebagai dependency
   useEffect(() => {
     if (!currentMitra) return;
 
@@ -170,9 +216,8 @@ export default function MitraChatPage() {
     });
 
     return () => unsub();
-  }, [currentMitra?.id, loadSessions]); // ID lebih stabil dari objek
+  }, [currentMitra?.id, loadSessions]);
 
-  // PERBAIKAN: Cleanup untuk typing timeout
   useEffect(() => {
     return () => {
       if (typingTimeout.current) {
@@ -181,10 +226,9 @@ export default function MitraChatPage() {
     };
   }, []);
 
-  // ✅ PERBAIKAN: Efek untuk scroll saja. "Mark as read" sudah dipindah ke loadSessions
   useEffect(() => {
     scrollToBottom();
-  }, [activeChat?.messages, scrollToBottom]); // Hanya scroll ketika pesan berubah
+  }, [activeChat?.messages, scrollToBottom]);
 
   // ===============================
   // HELPER FUNCTIONS
@@ -195,22 +239,26 @@ export default function MitraChatPage() {
       minute: "2-digit",
     });
 
-  // PERBAIKAN: Komponen StatusIcon yang diperbarui untuk menampilkan status pesan dengan benar
+  const formatBookingDate = (date: string) => {
+    const parsedDate = new Date(String(date).slice(0, 10));
+    return Number.isNaN(parsedDate.getTime())
+      ? String(date)
+      : parsedDate.toLocaleDateString("id-ID", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        });
+  };
+
+  const formatBookingTime = (time: string) => String(time).slice(0, 5);
+
   const StatusIcon = ({ msg }: { msg: ChatMessage }) => {
-    // Hanya tampilkan status untuk pesan dari talent
     if (msg.senderType !== "talent") return null;
-    
-    // Status sent: satu centang abu-abu
     if (msg.status === "sent") return <Check className="w-4 h-4 text-gray-400" />;
-    
-    // Status delivered: dua centang abu-abu
     if (msg.status === "delivered")
       return <CheckCheck className="w-4 h-4 text-gray-400" />;
-    
-    // Status read: dua centang biru
     if (msg.status === "read")
       return <CheckCheck className="w-4 h-4 text-blue-500" />;
-    
     return null;
   };
 
@@ -218,7 +266,6 @@ export default function MitraChatPage() {
   // RENDER LOGIC
   // ===============================
 
-  // Jika tidak ada mitra yang login, tampilkan loading
   if (!currentMitra) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -227,7 +274,6 @@ export default function MitraChatPage() {
     );
   }
 
-  // PERBAIKAN: Tampilkan loading saat data sedang dimuat
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -273,9 +319,6 @@ export default function MitraChatPage() {
             >
               <div className="flex justify-between items-center">
                 <p className="font-medium">{s.userName}</p>
-                {s.unreadCount > 0 && (
-                  <Badge variant="destructive">{s.unreadCount}</Badge>
-                )}
               </div>
               <p className="text-sm text-gray-500 truncate">
                 {s.isUserTyping ? "Sedang mengetik..." : s.lastMessage}
@@ -293,6 +336,7 @@ export default function MitraChatPage() {
           </CardContent>
         ) : (
           <>
+            {/* HEADER CHAT DENGAN TAMBAHAN COUNTDOWN SISA WAKTU */}
             <div className="p-4 border-b bg-white shrink-0">
               <div className="flex items-center gap-4">
                 <Button
@@ -309,13 +353,23 @@ export default function MitraChatPage() {
                   className="w-10 h-10 rounded-full object-cover border"
                 />
                 <div className="flex-1">
-                  <h3 className="font-semibold">{activeChat.userName}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold">{activeChat.userName}</h3>
+                    {/* Badge Sisa Waktu / Countdown */}
+                    {timeLeft && (
+                      <Badge variant={isBookingExpired ? "secondary" : "default"} className="text-xs flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {timeLeft}
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-sm text-muted-foreground">
                     {activeChat.purpose} • {activeChat.duration} jam
                   </p>
                 </div>
-                <div className="text-sm text-muted-foreground">
-                  {activeChat.date} • {activeChat.time}
+                <div className="text-sm text-muted-foreground text-right">
+                  <div>{formatBookingDate(activeChat.date)}</div>
+                  <div className="text-xs">{formatBookingTime(activeChat.time)}</div>
                 </div>
               </div>
             </div>
@@ -370,12 +424,15 @@ export default function MitraChatPage() {
                   onChange={(e) => handleTyping(e.target.value)}
                   placeholder="Ketik pesan..."
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  disabled={isSending}
+                  disabled={isSending || isBookingExpired}
                 />
-                <Button onClick={handleSend} disabled={!message.trim() || isSending}>
+                <Button onClick={handleSend} disabled={!message.trim() || isSending || isBookingExpired}>
                   {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </Button>
               </div>
+              {isBookingExpired && (
+                <p className="text-xs text-muted-foreground mt-2">Sesi booking sudah selesai. Riwayat chat tetap dapat dilihat.</p>
+              )}
             </div>
           </>
         )}

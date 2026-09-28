@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Talent } from "@/data/mockData";
+import { getBookings } from "@/lib/bookingStore";
 
 interface TalentCardProps {
   talent: Talent;
@@ -25,12 +26,7 @@ const isValidTalent = (talent: Talent): boolean => {
     talent &&
     talent.id &&
     talent.name &&
-    talent.name.trim() !== "" &&
-    talent.photo &&
-    talent.photo.trim() !== "" &&
-    talent.city &&
-    talent.age >= 18 &&
-    talent.age <= 40
+    talent.name.trim() !== ""
   );
 };
 
@@ -57,20 +53,29 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
   }
 
   // Kalkulasi langsung tanpa useMemo untuk kesederhanaan
-  const talentPhoto = talent.photo;
-  const formattedPrice = formatPrice(talent.pricePerHour || talent.price || 0);
+  const talentPhoto = talent.photo || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(talent.name)}`;
+  const talentCity = talent.city || 'Indonesia';
+  const talentAge = (talent.age && talent.age > 0) ? talent.age : 22;
+  const formattedPrice = formatPrice(talent.pricePerHour || talent.price || 100000);
   
   let badgeVariant: "default" | "secondary" | "destructive" | "outline" | "accent" | "success" = "secondary";
   let badgeText = "Offline";
   if (talent.availability === "online") {
     badgeVariant = "accent";
     badgeText = "Online";
-  } else if (talent.availability === "both") {
+  } else if (talent.availability === "both" || !talent.availability) {
     badgeVariant = "success";
     badgeText = "Online & Offline";
   }
 
   const displayedSkills = (talent.skills || []).slice(0, 3);
+
+  const bookings = getBookings();
+  const ratedBookings = bookings.filter((b: any) => (b.talentId === talent.id || b.talentId === talent.talentId) && typeof b.rating === "number" && b.rating > 0);
+  const talentReviewCount = ratedBookings.length;
+  const talentRating = talentReviewCount > 0 
+    ? (ratedBookings.reduce((sum: number, b: any) => sum + Number(b.rating), 0) / talentReviewCount).toFixed(1) 
+    : "0.0";
 
   return (
     <Card hover className="overflow-hidden group">
@@ -103,16 +108,16 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
         <div className="absolute bottom-0 left-0 right-0 p-4 text-primary-foreground">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="font-bold text-lg">{talent.name}</h3>
-            <span className="text-sm opacity-80">{talent.age} thn</span>
+            <span className="text-sm opacity-80">{talentAge} thn</span>
           </div>
           
           <div className="flex items-center gap-2 text-sm opacity-90 mb-2">
             <MapPin className="w-3 h-3" />
-            <span>{talent.city}</span>
+            <span>{talentCity}</span>
             <span className="mx-1">•</span>
             <Star className="w-3 h-3 fill-current text-amber-400" />
-            <span>{talent.rating || 0}</span>
-            <span className="opacity-70">({talent.reviewCount || 0})</span>
+            <span>{talentRating}</span>
+            <span className="opacity-70">({talentReviewCount})</span>
           </div>
 
           <div className="flex flex-wrap gap-1">

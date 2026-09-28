@@ -1,24 +1,63 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title id="app-title">Lovable App</title>
-    <meta name="description" content="Lovable Generated Project" />
-    <meta name="author" content="Lovable" />
+    <title id="app-title">RentMate - Teman Terpercaya #1 di Indonesia</title>
+    <meta name="description" content="RentMate adalah platform teman profesional terpercaya di Indonesia. Temukan teman untuk jalan, ngobrol, nonton, dan berbagai aktivitas lainnya dengan aman dan legal." />
+    <meta name="author" content="RentMate" />
+    <meta name="keywords" content="rental teman, sewa teman, teman jalan, teman ngobrol, platform teman Indonesia, RentMate" />
+    <meta name="robots" content="index, follow" />
 
-    <meta property="og:title" id="og-title" content="Lovable App" />
-    <meta property="og:description" content="Lovable Generated Project" />
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f97316'/%3E%3Ctext x='50%25' y='55%25' font-family='Arial' font-size='18' font-weight='bold' fill='white' text-anchor='middle' dominant-baseline='middle'%3ER%3C/text%3E%3C/svg%3E" />
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f97316'/%3E%3Ctext x='50%25' y='55%25' font-family='Arial' font-size='18' font-weight='bold' fill='white' text-anchor='middle' dominant-baseline='middle'%3ER%3C/text%3E%3C/svg%3E" />
+
+    <!-- Open Graph (Facebook, WhatsApp, dll) -->
+    <meta property="og:title" id="og-title" content="RentMate - Teman Terpercaya #1 di Indonesia" />
+    <meta property="og:description" content="Temukan teman profesional untuk menemani berbagai aktivitas kamu. Aman, legal, dan terverifikasi." />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+    <meta property="og:locale" content="id_ID" />
 
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:site" content="@Lovable" />
-    <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="RentMate - Teman Terpercaya #1 di Indonesia" />
+    <meta name="twitter:description" content="Temukan teman profesional untuk menemani berbagai aktivitas kamu. Aman, legal, dan terverifikasi." />
+
   </head>
 
   <body>
     <div id="root"></div>
+
+    <!-- Pemuat font opsional. Jika Google Fonts tidak dapat dijangkau
+         (jaringan lambat / diblokir), aplikasi TETAP tampil memakai font
+         sistem. Font TIDAK PERNAH menahan render. -->
+    <script>
+      (function () {
+        try {
+          var l1 = document.createElement('link');
+          l1.rel = 'preconnect';
+          l1.href = 'https://fonts.googleapis.com';
+          document.head.appendChild(l1);
+
+          var l2 = document.createElement('link');
+          l2.rel = 'preconnect';
+          l2.href = 'https://fonts.gstatic.com';
+          l2.crossOrigin = 'anonymous';
+          document.head.appendChild(l2);
+
+          var font = document.createElement('link');
+          font.rel = 'stylesheet';
+          font.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap';
+          font.media = 'print';
+          font.onload = function () { font.media = 'all'; };
+          document.head.appendChild(font);
+        } catch (e) {
+          /* abaikan: aplikasi pakai font sistem */
+        }
+      })();
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

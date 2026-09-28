@@ -16,6 +16,7 @@ import {
   Building2,
   Upload,
   Star,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,18 +25,19 @@ import { Input } from "@/components/ui/input";
 import { talents, bookingPurposes } from "@/data/mockData";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  addBooking, 
-  getBookingById, 
-  getBookings, 
-  subscribeToBookings, 
-  updateBookingPayment, 
-  SharedBooking, 
+import {
+  addBooking,
+  getBookingById,
+  getBookings,
+  refreshBookingsFromSupabase,
+  subscribeToBookings,
+  updateBookingPayment,
+  SharedBooking,
   updateBookingRating,
   getCurrentUserOrMitra
 } from "@/lib/bookingStore";
-import { getCurrentUser } from "@/lib/userStore";
-import { isTimeSlotBooked } from '@/lib/bookingStore';
+import { getCurrentUser, updateCurrentUser } from "@/lib/userStore";
+import { isTimeSlotBooked, isTimeSlotInPast } from '@/lib/bookingStore';
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 
 type BookingStatus = "draft" | "pending_payment" | "pending_approval" | "approved" | "completed" | "rejected";
@@ -66,23 +68,24 @@ export default function Booking() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  
+
   // State untuk menyimpan data booking saat ini
   const [currentBooking, setCurrentBooking] = useState<SharedBooking | null>(null);
-  
+
   // State untuk loading talent
   const [isLoadingTalent, setIsLoadingTalent] = useState(true);
   const [allTalents, setAllTalents] = useState<any[]>([]);
-  
+
   // Pindahkan deklarasi bookingStatus ke atas
   const [bookingStatus, setBookingStatus] = useState<BookingStatus>("draft");
   const [currentBookingId, setCurrentBookingId] = useState<string | null>(null);
-  
+
   // State untuk data talent yang akan ditampilkan
   const [displayTalent, setDisplayTalent] = useState<any>(null);
-  
+
   // State untuk menangani apakah data sedang dimuat
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [, setBookingRefreshKey] = useState(0);
 
   // State untuk tujuan kustom
   const [customPurpose, setCustomPurpose] = useState("");
@@ -93,7 +96,7 @@ export default function Booking() {
       try {
         const talents = await getAllVerifiedTalents();
         setAllTalents(talents);
-        
+
         // Cari talent berdasarkan ID
         const foundTalent = talents.find((t) => t.id === id);
         setDisplayTalent(foundTalent);
@@ -107,7 +110,7 @@ export default function Booking() {
         setIsInitialLoading(false);
       }
     };
-    
+
     if (id) {
       loadTalents();
     } else {
@@ -125,16 +128,18 @@ export default function Booking() {
     time: "",
     notes: "",
   });
-  
+
   // Payment states
-  const [paymentMethod, setPaymentMethod] = useState<"qris" | "bca" | "bri" | "mandiri" | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"qris" | "bca" | "bri" | "mandiri" | "saldo" | null>(null);
   const [paymentCode, setPaymentCode] = useState<string>("");
+  // Saldo dompet user (untuk metode pembayaran "Saldo Dompet").
+  const [walletBalance, setWalletBalance] = useState<number>(0);
   const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
   const [paymentProof, setPaymentProof] = useState<string>("");
   const [paymentNote, setPaymentNote] = useState<string>("");
   const [transferAmount, setTransferAmount] = useState<number>(0);
   const [transferTime, setTransferTime] = useState<string>("");
-  
+
   // State for admin-configured payment settings
   const [qrisCode, setQrisCode] = useState<string>("");
   const [bankAccounts, setBankAccounts] = useState({
@@ -143,24 +148,62 @@ export default function Booking() {
     mandiri: { number: "5555666677", holder: "PT RentMate Indonesia" },
   });
 
-  // Load payment settings from localStorage
+  // Muat saldo dompet user yang sedang login (untuk metode pembayaran "Saldo Dompet")
   useEffect(() => {
-    const savedQris = localStorage.getItem("rentmate_admin_qris_code");
-    if (savedQris) {
-      setQrisCode(savedQris);
-    }
+    let isMounted = true;
 
-    const savedBanks = localStorage.getItem("rentmate_bank_accounts");
-    if (savedBanks) {
-      try {
-        setBankAccounts(JSON.parse(savedBanks));
-      } catch (error) {
-        console.error("Failed to parse bank accounts from localStorage:", error);
+    const loadWallet = async () => {
+      const current = getCurrentUserOrMitra();
+      // Mitra tidak memiliki dompet saldo, hanya user.
+      if (!current || current.type !== "user") {
+        if (isMounted) setWalletBalance(0);
+        return;
       }
-    }
+      const profile = await getCurrentUser();
+      if (isMounted) setWalletBalance(profile?.wallet ?? 0);
+    };
+
+    loadWallet();
+    window.addEventListener("userUpdated", loadWallet);
+    return () => {
+      isMounted = false;
+      window.removeEventListener("userUpdated", loadWallet);
+    };
   }, []);
 
-  const staticQrisUrl = import.meta.env.VITE_STATIC_QRIS_URL
+  // Fallback QRIS default
+  const DEFAULT_QRIS = "/assets/qris-default.png";
+  const staticQrisUrl = import.meta.env.VITE_STATIC_QRIS_URL;
+
+  // QRIS yang benar-benar ditampilkan: prioritas QRIS dari state/admin, jika kosong pakai fallback statis/default.
+  const activeQrisCode = qrisCode || localStorage.getItem("rentmate_admin_qris_code") || staticQrisUrl || DEFAULT_QRIS;
+
+  // Load payment settings from localStorage
+  useEffect(() => {
+    const loadSettings = () => {
+      const savedQris = localStorage.getItem("rentmate_admin_qris_code");
+      if (savedQris) {
+        setQrisCode(savedQris);
+      } else {
+        setQrisCode(DEFAULT_QRIS);
+      }
+
+      const savedBanks = localStorage.getItem("rentmate_bank_accounts");
+      if (savedBanks) {
+        try {
+          setBankAccounts(JSON.parse(savedBanks));
+        } catch (error) {
+          console.error("Failed to parse bank accounts from localStorage:", error);
+        }
+      }
+    };
+
+    loadSettings();
+    window.addEventListener("storage", loadSettings);
+    return () => {
+      window.removeEventListener("storage", loadSettings);
+    };
+  }, []);
 
   // Fungsi untuk membuat kunci localStorage yang unik
   const getPaymentCodeStorageKey = (userId: string, talentId: string, date: string, time: string) => {
@@ -182,13 +225,13 @@ export default function Booking() {
       code = `PAY-${year}-${random}`;
       localStorage.setItem(storageKey, code);
     }
-    
+
     return code;
   };
 
   const generateTimeSlots = () => {
     const slots = [];
-    
+
     // Pagi (08:00 - 11:00)
     for (let hour = 8; hour < 12; hour++) {
       for (let minute = 0; minute < 60; minute += 30) {
@@ -197,7 +240,7 @@ export default function Booking() {
         slots.push(`${formattedHour}:${formattedMinute}`);
       }
     }
-    
+
 
     for (let hour = 12; hour < 15; hour++) {
       for (let minute = 0; minute < 60; minute += 30) {
@@ -222,7 +265,7 @@ export default function Booking() {
         slots.push(`${formattedHour}:${formattedMinute}`);
       }
     }
-    
+
     return slots;
   };
 
@@ -243,11 +286,11 @@ export default function Booking() {
         description: "Kamu tidak bisa mem-booking dirimu sendiri.",
         variant: "destructive",
       });
-      navigate("/talents"); 
+      navigate("/talents");
       return;
     }
     // ----------------------------------------------------------
-    
+
     const allBookings = getBookings();
     const now = new Date();
     const userId = currentUser.type === "mitra" ? currentUser.data.talentId : currentUser.data.id;
@@ -258,11 +301,11 @@ export default function Booking() {
       if (b.userId !== userId || b.talentId !== id || b.approvalStatus === "rejected") {
         return false;
       }
-      
+
       // 2. Cek apakah waktu booking sudah lewat
       const startTime = new Date(`${b.date}T${b.time}`);
       const endTime = new Date(startTime.getTime() + b.duration * 60 * 60 * 1000);
-      
+
       // 3. Hanya anggap sebagai "aktif" jika booking belum berakhir
       return endTime > now;
     });
@@ -272,7 +315,7 @@ export default function Booking() {
       setCurrentBookingId(null);
       setBookingStatus("draft");
       setStep(1);
-      
+
       // Coba ambil kode dari localStorage untuk booking yang sedang dibuat
       const potentialCode = getOrCreateStablePaymentCode();
       if (potentialCode) {
@@ -322,7 +365,7 @@ export default function Booking() {
       setStep(5); // Langsung ke step 5 (Chat)
       return;
     }
-    
+
   if (existingBooking.date && existingBooking.time && existingBooking.duration) {
     const startTime = new Date(
       `${existingBooking.date}T${existingBooking.time}`
@@ -339,6 +382,16 @@ export default function Booking() {
     }
   }
   }, [id]); // Dependency tetap [id]
+
+  useEffect(() => {
+    if (!id) return;
+
+    const refreshSlotAvailability = () => setBookingRefreshKey((value) => value + 1);
+    const unsubscribe = subscribeToBookings(refreshSlotAvailability);
+    void refreshBookingsFromSupabase().then(refreshSlotAvailability);
+
+    return unsubscribe;
+  }, [id]);
 
   // Bersihkan localStorage jika status berubah atau booking dibatalkan
   useEffect(() => {
@@ -456,6 +509,9 @@ export default function Booking() {
   const totalPrice = talentForDisplay ? talentForDisplay.pricePerHour * bookingData.duration : 0;
   const displayAmount = talentForDisplay ? getRandomizedAmount(totalPrice) : 0;
 
+  // True jika saldo dompet user kurang dari total pembayaran.
+  const saldoInsufficient = walletBalance < totalPrice;
+
   const handleNext = () => {
     if (bookingStatus !== "draft") return;
     if (step < 3) {
@@ -471,7 +527,7 @@ export default function Booking() {
 
 const handlePayment = async () => {
     const currentUser = getCurrentUserOrMitra();
-    
+
     if (!currentUser) {
       toast({
         title: "Error",
@@ -486,6 +542,9 @@ const handlePayment = async () => {
 
     try {
       const newPaymentCode = getOrCreateStablePaymentCode();
+
+      // Ambil data terbaru sebelum validasi agar slot tidak lolos karena cache lama.
+      await refreshBookingsFromSupabase();
 
       // Validasi bentrok jadwal sebelum booking disimpan
       const isConflict = isTimeSlotBooked(
@@ -515,11 +574,12 @@ const handlePayment = async () => {
         time: bookingData.time,
         duration: bookingData.duration,
         total: totalPrice,
+        notes: bookingData.notes,
         paymentStatus: "pending",
         approvalStatus: "pending_approval",
         paymentCode: newPaymentCode,
       });
-      
+
       setCurrentBookingId(booking.id);
       setPaymentCode(newPaymentCode);
       setBookingStatus("pending_payment");
@@ -536,7 +596,7 @@ const handlePayment = async () => {
     }
   };
 
-  
+
 const handleConfirmPayment = async () => {
     if (isProcessing) return;
 
@@ -560,6 +620,7 @@ const handleConfirmPayment = async () => {
       ) {
         toast({
           title: "Bukti transfer wajib diupload",
+          description: "Silakan unggah bukti pembayaran terlebih dahulu.",
           variant: "destructive",
         });
         return;
@@ -576,6 +637,36 @@ const handleConfirmPayment = async () => {
         return;
       }
 
+      // Pembayaran via Saldo Dompet: potong saldo user (tidak perlu bukti transfer).
+      if (paymentMethod === "saldo") {
+        if (currentUser.type !== "user") {
+          toast({
+            title: "Saldo dompet tidak tersedia",
+            description: "Metode saldo dompet hanya untuk akun pengguna.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        const profile = await getCurrentUser();
+        const currentBalance = profile?.wallet ?? walletBalance;
+
+        if (currentBalance < totalPrice) {
+          toast({
+            title: "Saldo tidak cukup",
+            description: `Saldo dompet kamu ${formatPrice(currentBalance)}, butuh ${formatPrice(totalPrice)}.`,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        const deducted = await updateCurrentUser({ wallet: currentBalance - totalPrice });
+        if (!deducted) {
+          throw new Error("Gagal memotong saldo dompet");
+        }
+        setWalletBalance(deducted.wallet);
+      }
+
       const autoTransferAmount = totalPrice;
       const autoTransferTime = new Date().toISOString();
 
@@ -585,9 +676,10 @@ const handleConfirmPayment = async () => {
 
       // UPDATE DATA PEMESANAN YANG SUDAH ADA
       const updated = await updateBookingPayment(currentBookingId, {
-        paymentMethod: paymentMethod as "qris" | "bca" | "bri" | "mandiri",
+        paymentMethod: paymentMethod as "qris" | "bca" | "bri" | "mandiri" | "saldo",
         paymentCode: paymentCode,
-        paymentProof: paymentProof,
+        // Metode saldo dompet tidak memerlukan bukti transfer.
+        paymentProof: paymentMethod === "saldo" ? "PAID_VIA_WALLET" : paymentProof,
         transferAmount: autoTransferAmount,
         transferTime: autoTransferTime,
       });
@@ -686,21 +778,21 @@ const handleConfirmPayment = async () => {
             { num: 4, label: "Approval" },
             { num: 5, label: "Chat" },
           ].map((s, i) => {
-            const stepCompleted = 
-              step > s.num || 
+            const stepCompleted =
+              step > s.num ||
               (s.num <= 3 && bookingStatus !== "draft") ||
               (s.num === 4 && (bookingStatus === "pending_approval" || bookingStatus === "approved" || bookingStatus === "rejected")) ||
               (s.num === 5 && bookingStatus === "approved");
-            
-            const stepActive = 
-              step === s.num || 
+
+            const stepActive =
+              step === s.num ||
               (s.num === 4 && (bookingStatus === "pending_approval" || bookingStatus === "rejected")) ||
               (s.num === 5 && bookingStatus === "approved");
-            
+
             const isPending = s.num === 4 && bookingStatus === "pending_approval";
             const isRejected = s.num === 4 && bookingStatus === "rejected";
             const isApproved = bookingStatus === "approved";
-            
+
             return (
               <div key={s.num} className="flex items-center">
                 <div className="flex flex-col items-center">
@@ -731,11 +823,11 @@ const handleConfirmPayment = async () => {
                   <div
                     className={cn(
                       "w-8 md:w-16 h-1 mx-1 md:mx-2 rounded-full transition-all",
-                      (step > s.num || 
-                       (s.num <= 3 && bookingStatus !== "draft") || 
+                      (step > s.num ||
+                       (s.num <= 3 && bookingStatus !== "draft") ||
                        (s.num === 4 && (bookingStatus === "pending_approval" || bookingStatus === "approved" || bookingStatus === "rejected")) ||
                        (s.num === 5 && bookingStatus === "approved"))
-                        ? "bg-primary" 
+                        ? "bg-primary"
                         : "bg-muted"
                     )}
                   />
@@ -784,8 +876,8 @@ const handleConfirmPayment = async () => {
                         <Button
                           key={purpose}
                           variant={
-                            (bookingData.purpose === purpose && purpose !== "Lainnya") || 
-                            (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:")) 
+                            (bookingData.purpose === purpose && purpose !== "Lainnya") ||
+                            (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:"))
                               ? "default" : "outline"
                           }
                           size="sm"
@@ -803,7 +895,7 @@ const handleConfirmPayment = async () => {
                         </Button>
                       ))}
                     </div>
-                    
+
                     {/* Tampilkan input teks jika "Lainnya" dipilih */}
                     {bookingData.purpose.startsWith("Lainnya:") && (
                       <div className="mt-3">
@@ -812,9 +904,9 @@ const handleConfirmPayment = async () => {
                           value={customPurpose}
                           onChange={(e) => {
                             setCustomPurpose(e.target.value);
-                            setBookingData({ 
-                              ...bookingData, 
-                              purpose: `Lainnya: ${e.target.value}` 
+                            setBookingData({
+                              ...bookingData,
+                              purpose: `Lainnya: ${e.target.value}`
                             });
                           }}
                         />
@@ -918,6 +1010,8 @@ const handleConfirmPayment = async () => {
 
                             const [hour] = time.split(":").map(Number);
                             const isOutsideWorkingHours = hour < 8 || hour >= 22;
+                            const isPast = isTimeSlotInPast(bookingData.date, time);
+                            const isUnavailable = isBooked || isOutsideWorkingHours || isPast;
 
                             return (
                               <Button
@@ -926,10 +1020,10 @@ const handleConfirmPayment = async () => {
                                 size="sm"
                                 className={cn(
                                   "text-xs",
-                                  (isBooked || isOutsideWorkingHours) &&
+                                  isUnavailable &&
                                     "opacity-50 cursor-not-allowed bg-muted text-muted-foreground"
                                 )}
-                                disabled={isBooked || isOutsideWorkingHours}
+                                disabled={isUnavailable}
                                 onClick={() =>
                                   setBookingData({ ...bookingData, time })
                                 }
@@ -976,8 +1070,8 @@ const handleConfirmPayment = async () => {
                     <div className="flex justify-between py-3 border-b">
                       <span className="text-muted-foreground">Tujuan</span>
                       <span className="font-medium">
-                        {bookingData.purpose.startsWith("Lainnya:") 
-                          ? customPurpose || bookingData.purpose 
+                        {bookingData.purpose.startsWith("Lainnya:")
+                          ? customPurpose || bookingData.purpose
                           : bookingData.purpose}
                       </span>
                     </div>
@@ -1115,20 +1209,82 @@ const handleConfirmPayment = async () => {
                           Transfer Bank
                         </p>
                       </Card>
+
+                      {/* Metode pembayaran: Saldo Dompet */}
+                      <Card
+                        hover
+                        className={cn(
+                          "p-4 text-center cursor-pointer border-2 transition-all col-span-2",
+                          paymentMethod === "saldo"
+                            ? "border-primary ring-2 ring-primary/20 bg-primary/5"
+                            : "border-input hover:border-primary/50"
+                        )}
+                        onClick={() => setPaymentMethod("saldo")}
+                      >
+                        <Wallet className="w-8 h-8 mx-auto mb-2 text-primary" />
+                        <h4 className="font-semibold text-sm">Saldo Dompet</h4>
+                        <p
+                          className={cn(
+                            "text-xs mt-1",
+                            saldoInsufficient ? "text-destructive" : "text-muted-foreground"
+                          )}
+                        >
+                          Saldo: {formatPrice(walletBalance)}
+                          {saldoInsufficient && " (tidak cukup)"}
+                        </p>
+                      </Card>
                     </div>
                   </div>
+
+                  {/* Saldo Dompet Payment Details */}
+                  {paymentMethod === "saldo" && (
+                    <Card className="p-6 bg-accent/50">
+                      <h3 className="font-semibold mb-4 text-center">Pembayaran dengan Saldo Dompet</h3>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Saldo kamu</span>
+                          <span className="font-medium">{formatPrice(walletBalance)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Total Pembayaran</span>
+                          <span className="font-medium">{formatPrice(totalPrice)}</span>
+                        </div>
+                        <div className="flex justify-between border-t pt-2">
+                          <span className="text-muted-foreground">Sisa Saldo</span>
+                          <span
+                            className={cn(
+                              "font-semibold",
+                              walletBalance >= totalPrice ? "text-green-600" : "text-red-500"
+                            )}
+                          >
+                            {formatPrice(walletBalance - totalPrice)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {walletBalance < totalPrice ? (
+                        <p className="text-xs text-red-500 text-center mt-4">
+                          Saldo tidak cukup. Silakan isi saldo dompet terlebih dahulu atau pilih metode lain.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-green-600 text-center mt-4">
+                          Saldo cukup. Pembayaran akan langsung dipotong dari dompet kamu.
+                        </p>
+                      )}
+                    </Card>
+                  )}
 
                   {/* QRIS Payment Details */}
                  {paymentMethod === "qris" && (
                       <Card className="p-6 bg-accent/50">
                         <h3 className="font-semibold mb-4 text-center">Scan QR Code untuk Pembayaran</h3>
-                        
-                        {qrisCode ? (
+
+                        {activeQrisCode ? (
                           <div className="flex justify-center mb-4">
                             <img
-                              src={qrisCode}
+                              src={activeQrisCode}
                               alt="QRIS Payment"
-                              className="w-90 h-90 md:w-100 md:h-100 rounded-lg border max-w-sm md:max-w-md" // Ukuran lebih besar dengan responsif
+                              className="w-72 h-72 md:w-80 md:h-80 rounded-lg border max-w-sm md:max-w-md bg-white p-2 object-contain shadow-sm"
                             />
                           </div>
                         ) : (
@@ -1156,7 +1312,7 @@ const handleConfirmPayment = async () => {
                   {(paymentMethod === "bca" || paymentMethod === "bri" || paymentMethod === "mandiri") && (
                     <Card className="p-6 bg-accent/50">
                       <h3 className="font-semibold mb-4 text-center">Informasi Rekening</h3>
-                      
+
                       <div className="space-y-4">
                         <div className="flex justify-between items-center py-2 border-b">
                           <span className="text-muted-foreground">Nama Bank</span>
@@ -1200,11 +1356,11 @@ const handleConfirmPayment = async () => {
                     </Card>
                   )}
 
-                  {paymentMethod && (
+                  {paymentMethod && paymentMethod !== "saldo" && (
                     <div className="space-y-4">
                       <div>
                         <label className="text-sm font-medium mb-2 block">
-                          Upload Bukti Pembayaran 
+                          Upload Bukti Pembayaran
                           {(paymentMethod === "bca" || paymentMethod === "bri" || paymentMethod === "mandiri" || paymentMethod === "qris") && (
                             <span className="text-red-500">*</span>
                           )}
@@ -1272,8 +1428,9 @@ const handleConfirmPayment = async () => {
                       <Button
                           variant="hero"
                           onClick={handleConfirmPayment}
-                          disabled={isProcessing || 
-                            ((paymentMethod === "bca" || paymentMethod === "bri" || paymentMethod === "mandiri" || paymentMethod === "qris") && !paymentProof)
+                          disabled={isProcessing ||
+                            ((paymentMethod === "bca" || paymentMethod === "bri" || paymentMethod === "mandiri" || paymentMethod === "qris") && !paymentProof) ||
+                            (paymentMethod === "saldo" && saldoInsufficient)
                           }
                           className="flex-1"
                         >

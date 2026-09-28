@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Loader2, MessageSquare } from 'lucide-react';
 
 import { getCurrentMitra } from '@/lib/mitraStore';
-import { getMitraBookings, SharedBooking } from '@/lib/bookingStore';
+import { getMitraBookings, SharedBooking, refreshBookingsFromSupabase } from '@/lib/bookingStore';
 import { getOrCreateChatSession } from '@/lib/chatStore';
 
 export default function MitraBookingsPage() {
@@ -22,7 +22,14 @@ export default function MitraBookingsPage() {
       return;
     }
 
-    const loadBookings = () => {
+    const loadBookings = async () => {
+      setLoading(true);
+      try {
+        await refreshBookingsFromSupabase();
+      } catch (e) {
+        console.error("Gagal refresh bookings:", e);
+      }
+      
       // Ambil berdasarkan mitra.id atau mitra.talentId agar fleksibel
       const all = getMitraBookings(mitra.id);
       const byTalent = mitra.talentId ? getMitraBookings(mitra.talentId) : [];
@@ -31,6 +38,9 @@ export default function MitraBookingsPage() {
       const combined = [...all, ...byTalent];
       const unique = Array.from(new Set(combined.map(b => b.id)))
         .map(id => combined.find(b => b.id === id)!);
+
+      // Urutkan dari yang terbaru
+      unique.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
       setBookings(unique);
       setLoading(false);

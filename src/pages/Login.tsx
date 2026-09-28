@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Mail, Lock, User, ArrowRight, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { getCurrentUser } from "@/lib/userStore";
-import { supabase } from "@/lib/supabase";
+
 
 export default function Login() {
   const navigate = useNavigate();
@@ -20,14 +20,6 @@ export default function Login() {
     password: "",
   });
 
-  // Proteksi: Jika sudah login, jangan biarkan masuk ke halaman login (cegah error 500)
-  useEffect(() => {
-    const username = localStorage.getItem("rentmate_current_username");
-    if (username) {
-      navigate("/profile", { replace: true });
-    }
-  }, [navigate]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -37,53 +29,137 @@ export default function Login() {
 
       try {
         if (isLogin) {
+          localStorage.removeItem("rentmate_current_username");
           localStorage.removeItem("mitraAuthenticated");
           localStorage.removeItem("rentmate_current_mitra");
           localStorage.removeItem("rentmate_current_user");
 
-          const { data, error } = await supabase
-            .from("users")
-            .select("*")
-            .eq("email", formData.email)
-            .single();
+          // 1. Coba login sebagai regular User.
+          //    Bisa pakai email ATAU username (banyak user mengingat username).
+          const identifier = formData.email.trim();
+          const candidates = [
+            `/api/users/by-email/${encodeURIComponent(identifier)}`,
+            `/api/users/${encodeURIComponent(identifier)}`,
+          ];
 
-          if (error || !data) {
+          let userResponse: Response | null = null;
+          for (const url of candidates) {
+            const res = await fetch(url);
+            if (res.ok) {
+              userResponse = res;
+              break;
+            }
+          }
+
+          if (userResponse) {
+            const data = await userResponse.json();
+
+            // Verifikasi password. Akun lama yang password-nya masih kosong
+            // tetap boleh masuk agar tidak mengunci user yang sudah terdaftar.
+            const storedPassword = String(data.password ?? "");
+            if (storedPassword !== "" && storedPassword !== formData.password) {
+              toast({
+                title: "Login Gagal",
+                description: "Kata sandi salah. Silakan coba lagi.",
+                variant: "destructive",
+              });
+              setIsLoading(false);
+              return;
+            }
+
+            localStorage.setItem("rentmate_current_username", data.username);
+            localStorage.setItem("rentmate_current_user", JSON.stringify(data));
+            window.dispatchEvent(new CustomEvent("userUpdated"));
+
             toast({
-              title: "Login Gagal",
-              description: "Akun tidak ditemukan. Silakan daftar terlebih dahulu.",
-              variant: "destructive",
+              title: "Login Berhasil! 🎉",
+              description: "Selamat datang kembali di RentMate",
             });
+
+            setTimeout(() => {
+              navigate("/profile", { replace: true });
+            }, 300);
             setIsLoading(false);
             return;
           }
 
-          localStorage.setItem("rentmate_current_username", data.username);
-          localStorage.setItem("rentmate_current_user", JSON.stringify(data));
+          // 2. Jika tidak ditemukan di tabel users, coba login sebagai Mitra
+          const mitraRes = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: formData.email,
+              password: formData.password,
+            }),
+          });
+
+          if (mitraRes.ok) {
+            const result = await mitraRes.json();
+            const mitraUser = {
+              ...result.user,
+              talentId: result.user.talentId || result.user.id || result.user.user_id,
+              isOnline: true,
+              lastActive: new Date().toISOString(),
+            };
+            localStorage.setItem("mitraAuthenticated", "true");
+            localStorage.setItem("rentmate_current_mitra", JSON.stringify(mitraUser));
+
+            toast({
+              title: "Login Mitra Berhasil! 🎉",
+              description: "Selamat datang kembali di Portal Mitra RentMate",
+            });
+
+            setTimeout(() => {
+              navigate("/mitra/dashboard", { replace: true });
+            }, 300);
+            setIsLoading(false);
+            return;
+          } else {
+            const errorData = await mitraRes.json().catch(() => null);
+            if (errorData && errorData.message && errorData.message.includes('belum disetujui')) {
+              toast({
+                title: "Akun Menunggu Verifikasi",
+                description: "Akun Mitra Anda belum disetujui oleh admin. Silakan tunggu persetujuan.",
+                variant: "destructive",
+              });
+              setIsLoading(false);
+              return;
+            }
+          }
+
+          // 3. Jika tidak ditemukan di manapun
+          toast({
+            title: "Login Gagal",
+            description: "Email atau password salah / Akun belum terdaftar.",
+            variant: "destructive",
+          });
+          setIsLoading(false);
+          return;
         } else {
+          localStorage.removeItem("rentmate_current_username");
           localStorage.removeItem("mitraAuthenticated");
           localStorage.removeItem("rentmate_current_mitra");
           localStorage.removeItem("rentmate_current_user");
 
-          const { data, error } = await supabase
-            .from("users")
-            .insert([
-              {
-                name: formData.name || usernameOnly,
-                username: usernameOnly,
-                email: formData.email,
-                phone: "",
-                bio: "",
-                city: "",
-                hobbies: "",
-                preference: "online",
-                photo: `https://api.dicebear.com/7.x/initials/svg?seed=${usernameOnly}`,
-                wallet: 0,
-              }
-            ])
-            .select()
-            .single();
+          const response = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: formData.name || usernameOnly,
+              username: usernameOnly,
+              email: formData.email,
+              password: formData.password,
+              phone: "",
+              bio: "",
+              city: "",
+              hobbies: "",
+              preference: "online",
+              photo: `https://api.dicebear.com/7.x/initials/svg?seed=${usernameOnly}`,
+              wallet: 0,
+            })
+          });
 
-          if (error) {
+          if (!response.ok) {
             toast({
               title: "Pendaftaran Gagal",
               description: "Username atau email sudah digunakan.",
@@ -92,6 +168,7 @@ export default function Login() {
             setIsLoading(false);
             return;
           }
+          const data = await response.json();
 
           localStorage.setItem("rentmate_current_username", usernameOnly);
           localStorage.setItem("rentmate_current_user", JSON.stringify(data));
@@ -127,66 +204,12 @@ export default function Login() {
   };
 
   const handleSocialLogin = async (provider: string) => {
-    setIsLoading(true);
-    
-    const usernameOnly = `user_${provider.toLowerCase()}`;
-    const email = `user@${provider.toLowerCase()}.com`;
-
-    try {
-      localStorage.removeItem("mitraAuthenticated");
-      localStorage.removeItem("rentmate_current_mitra");
-      localStorage.removeItem("rentmate_current_user");
-
-      const { data: existingUser } = await supabase
-        .from("users")
-        .select("*")
-        .eq("email", email)
-        .single();
-
-      if (!existingUser) {
-        const { data: newUser } = await supabase
-          .from("users")
-          .insert([
-            {
-              name: `User ${provider}`,
-              username: usernameOnly,
-              email: email,
-              phone: "",
-              bio: "",
-              city: "",
-              hobbies: "",
-              preference: "online",
-              photo: `https://api.dicebear.com/7.x/initials/svg?seed=${provider}`,
-              wallet: 0,
-            }
-          ])
-          .select()
-          .single();
-          
-        localStorage.setItem("rentmate_current_user", JSON.stringify(newUser));
-      } else {
-        localStorage.setItem("rentmate_current_user", JSON.stringify(existingUser));
-      }
-
-      localStorage.setItem("rentmate_current_username", usernameOnly);
-      window.dispatchEvent(new CustomEvent("userUpdated"));
-
-      toast({
-        title: `Login dengan ${provider} Berhasil! 🎉`,
-        description: "Selamat datang di RentMate",
-      });
-
-      setTimeout(() => {
-        navigate("/profile", { replace: true });
-      }, 500);
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Terjadi kesalahan server.",
-        variant: "destructive",
-      });
-    }
-    setIsLoading(false);
+    // Menonaktifkan dummy social login yang membuat data bentrok
+    toast({
+      title: "Fitur Belum Tersedia",
+      description: `Login dengan ${provider} sedang dalam tahap pengembangan. Silakan gunakan email untuk saat ini.`,
+      variant: "default",
+    });
   };
 
   return (

@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { 
-  Settings, 
-  Calendar, 
-  Clock, 
-  User, 
-  Star, 
-  MessageCircle, 
+import {
+  Settings,
+  Calendar,
+  Clock,
+  User,
+  Star,
+  MessageCircle,
   ArrowRight,
   History,
   CreditCard,
@@ -21,21 +21,23 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
-  DialogFooter 
+import {  Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter
 } from "@/components/ui/dialog";
-import { getCurrentMitra, subscribeToMitraChanges } from "@/lib/mitraStore";
-import { 
+import { getCurrentMitra, subscribeToMitraChanges, updateMitraProfile } from "@/lib/mitraStore";
+import {
   getBookings,
   refreshBookingsFromSupabase,
   subscribeToBookings,
-  calculateMitraEarnings, 
+  calculateMitraEarnings,
+  calculateMitraRating,
   subscribeToCompletedBookings,
-  updateBookingApproval 
+  updateBookingApproval
 } from "@/lib/bookingStore";
 import { formatPrice } from "@/lib/utils";
 import { Link } from "react-router-dom";
@@ -60,6 +62,73 @@ export default function Pengaturan() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // State untuk edit profil mitra
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    name: "",
+    photo: "",
+    city: "",
+    category: "",
+    description: "",
+  });
+
+  // Buka dialog edit profil & isi form dari data mitra saat ini
+  const handleOpenEditProfile = () => {
+    setProfileForm({
+      name: currentMitra?.name || "",
+      photo: currentMitra?.photo || "",
+      city: currentMitra?.city || currentMitra?.address || "",
+      category: currentMitra?.category || "",
+      description: currentMitra?.description || "",
+    });
+    setShowEditProfile(true);
+  };
+
+  // Unggah foto profil mitra (base64)
+  const handleProfilePhotoUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ title: "Upload Gagal", description: "Ukuran foto maksimal 5MB", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setProfileForm(prev => ({ ...prev, photo: reader.result as string }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Simpan perubahan profil mitra oleh mitra sendiri
+  const handleSaveProfile = async () => {
+    if (!profileForm.name.trim()) {
+      toast({ title: "Nama wajib diisi", variant: "destructive" });
+      return;
+    }
+    setIsSavingProfile(true);
+    try {
+      const updated = await updateMitraProfile({
+        name: profileForm.name || undefined,
+        photo: profileForm.photo || undefined,
+        city: profileForm.city || undefined,
+        category: profileForm.category || undefined,
+        description: profileForm.description || undefined,
+      });
+      setCurrentMitra(updated);
+      toast({ title: "Profil Diperbarui", description: "Perubahan profil berhasil disimpan." });
+      setShowEditProfile(false);
+    } catch (error: any) {
+      toast({
+        title: "Gagal Menyimpan",
+        description: error.message || "Terjadi kesalahan saat menyimpan profil.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   // Fungsi untuk mendapatkan persentase komisi aplikasi
   const getAppCommission = (): number => {
@@ -166,6 +235,10 @@ export default function Pengaturan() {
         booking.talentId === mitra.talentId
       );
       setBookings(mitraBookings);
+      setCurrentMitra(previous => previous ? {
+        ...previous,
+        rating: calculateMitraRating(mitra.talentId),
+      } : previous);
       calculateEarnings(mitraBookings);
     } catch (err) {
       console.error("Gagal refresh booking:", err);
@@ -177,6 +250,19 @@ export default function Pengaturan() {
     const mitra = getCurrentMitra();
     if (mitra) {
       setCurrentMitra(mitra);
+      // Sinkronisasi foto terbaru dari API (foto bisa diperbarui oleh admin)
+      fetch('/api/talents')
+        .then(r => r.ok ? r.json() : null)
+        .then((data: any[] | null) => {
+          if (!data) return;
+          const fresh = data.find((t: any) => t.user_id === mitra.talentId || t.user_id === mitra.id);
+          if (fresh?.photo && fresh.photo !== mitra.photo) {
+            const updated = { ...mitra, photo: fresh.photo };
+            localStorage.setItem("rentmate_current_mitra", JSON.stringify(updated));
+            setCurrentMitra(updated);
+          }
+        })
+        .catch(() => {/* silent */});
       // Langsung fetch dari Supabase saat mount
       refreshBookings();
     }
@@ -365,12 +451,93 @@ export default function Pengaturan() {
                 </div>
               </div>
             </div>
-            <Button variant="outline" onClick={handleLogout}>
-              <LogOut className="w-4 h-4 mr-2" />
-              Keluar
-            </Button>
+            <div className="flex flex-col gap-2">
+              <Button variant="outline" onClick={handleOpenEditProfile}>
+                <User className="w-4 h-4 mr-2" />
+                Edit Profil
+              </Button>
+              <Button variant="outline" onClick={handleLogout}>
+                <LogOut className="w-4 h-4 mr-2" />
+                Keluar
+              </Button>
+            </div>
           </div>
         </Card>
+
+        {/* Dialog Edit Profil Mitra */}
+        <Dialog open={showEditProfile} onOpenChange={setShowEditProfile}>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <User className="w-5 h-5" />
+                Edit Profil
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <img
+                  src={profileForm.photo || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face"}
+                  alt={profileForm.name || "Profile"}
+                  className="w-20 h-20 rounded-full object-cover border-2 border-background shadow"
+                />
+                <div className="flex-1">
+                  <Input type="file" accept="image/*" onChange={handleProfilePhotoUpload} className="text-xs" />
+                  <p className="text-xs text-muted-foreground mt-1">Unggah foto baru (JPG/PNG, maks 5MB)</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-2 block">Nama</label>
+                <Input
+                  value={profileForm.name}
+                  onChange={(e) => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="Nama lengkap"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Kota</label>
+                  <Input
+                    value={profileForm.city}
+                    onChange={(e) => setProfileForm(prev => ({ ...prev, city: e.target.value }))}
+                    placeholder="Contoh: Yogyakarta"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Kategori</label>
+                  <Input
+                    value={profileForm.category}
+                    onChange={(e) => setProfileForm(prev => ({ ...prev, category: e.target.value }))}
+                    placeholder="Contoh: Travelling"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-2 block">Deskripsi Diri</label>
+                <textarea
+                  className="w-full min-h-[90px] rounded-md border-input bg-background px-3 py-2 text-sm"
+                  value={profileForm.description}
+                  onChange={(e) => setProfileForm(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Ceritakan tentang dirimu..."
+                />
+              </div>
+
+              <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg">
+                Catatan: Harga per jam ditentukan oleh admin dan tidak dapat diubah sendiri.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEditProfile(false)}>
+                Batal
+              </Button>
+              <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                {isSavingProfile ? "Menyimpan..." : "Simpan"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Tabs */}
         <div className="flex gap-2 mb-6 border-b">
@@ -428,14 +595,14 @@ export default function Pengaturan() {
                     onClick={() => handleViewTransactionDetails(booking)}>
                     <div className="flex items-start gap-4">
                       <img
-                        src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&h=100&fit=crop&crop=face"
-                        alt="User"
+                        src={booking.userPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(booking.userName || 'U')}&background=f3f4f6&color=6b7280`}
+                        alt={booking.userName || "Pengguna"}
                         className="w-12 h-12 rounded-full object-cover"
                       />
                       <div className="flex-1">
                         <div className="flex items-start justify-between">
                           <div>
-                            <h3 className="font-semibold">User Pemesanan</h3>
+                            <h3 className="font-semibold">{booking.userName || "Pengguna"}</h3>
                             <p className="text-sm text-muted-foreground">
                               {formatDate(booking.date)} • {booking.time} • {booking.duration} jam
                             </p>
@@ -592,7 +759,7 @@ export default function Pengaturan() {
                         <div key={booking.id} className="flex items-center justify-between pb-3 border-b last:border-0 cursor-pointer hover:bg-muted/30 p-2 rounded transition-colors"
                           onClick={() => handleViewTransactionDetails(booking)}>
                           <div>
-                            <p className="font-medium">User Pemesanan</p>
+                            <p className="font-medium">{booking.userName || "Pengguna"}</p>
                             <p className="text-sm text-muted-foreground">
                               {formatDate(booking.date)} • {booking.time} • {booking.duration} jam
                             </p>
@@ -663,10 +830,10 @@ export default function Pengaturan() {
             <div className="space-y-6">
               <div className="flex items-center gap-4 mb-4">
                 <div className="flex items-center gap-3 flex-1">
-                  <img src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&h=100&fit=crop&crop=face" alt="User" className="w-12 h-12 rounded-full object-cover border-2 border-background shadow" />
+                  <img src={selectedTransaction.userPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedTransaction.userName || 'U')}&background=f3f4f6&color=6b7280`} alt={selectedTransaction.userName || "Pengguna"} className="w-12 h-12 rounded-full object-cover border-2 border-background shadow" />
                   <div>
                     <p className="text-xs text-muted-foreground">Pengguna</p>
-                    <h3 className="font-bold">User Pemesanan</h3>
+                    <h3 className="font-bold">{selectedTransaction.userName || "Pengguna"}</h3>
                   </div>
                 </div>
                 <div className="text-center text-muted-foreground">
@@ -760,20 +927,31 @@ export default function Pengaturan() {
             </div>
           )}
           <DialogFooter className="flex justify-between items-center">
-            {selectedTransaction?.approvalStatus === "pending_approval" ? (
-              <div className="flex gap-2">
-                <Button 
-                  variant="destructive" 
-                  onClick={() => handleUpdateApproval(selectedTransaction.id, "rejected")}
-                >
-                  Tolak
-                </Button>
-                <Button 
-                  className="bg-green-600 hover:bg-green-700 text-white" 
-                  onClick={() => handleUpdateApproval(selectedTransaction.id, "approved")}
-                >
-                  Terima (Approve)
-                </Button>
+            {/* Tombol Terima/Tolak muncul saat menunggu persetujuan mitra,
+                baik saat status masih "pending_approval" (belum diproses admin)
+                maupun "pending_mitra" (admin sudah verifikasi, menunggu mitra). */}
+            {selectedTransaction?.approvalStatus === "pending_approval" ||
+            selectedTransaction?.approvalStatus === "pending_mitra" ? (
+              <div className="flex flex-col gap-2">
+                {selectedTransaction?.approvalStatus === "pending_mitra" && (
+                  <p className="text-xs text-muted-foreground">
+                    Admin sudah memverifikasi pembayaran. Konfirmasi apakah Anda bisa melayani pesanan ini.
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleUpdateApproval(selectedTransaction.id, "rejected")}
+                  >
+                    Tolak
+                  </Button>
+                  <Button
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                    onClick={() => handleUpdateApproval(selectedTransaction.id, "approved")}
+                  >
+                    Terima (Approve)
+                  </Button>
+                </div>
               </div>
             ) : (
               <div />

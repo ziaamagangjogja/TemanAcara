@@ -6,8 +6,9 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { talents } from "@/data/mockData";
-import { getBookings, SharedBooking, deleteBooking } from "@/lib/bookingStore";
+import { getBookings, refreshBookingsFromSupabase, SharedBooking, deleteBooking } from "@/lib/bookingStore";
 import { getCurrentUser } from "@/lib/userStore";
+import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,12 +25,17 @@ type BookingStatus = "pending_payment" | "pending_approval" | "approved" | "comp
 
 export default function Bookings() {
   const [bookings, setBookings] = useState<SharedBooking[]>([]);
+  const [allTalents, setAllTalents] = useState<any[]>(talents);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchBookings = async () => {
       setIsLoading(true);
-      const allBookings = getBookings();
+      const [allBookings, loadedTalents] = await Promise.all([
+        refreshBookingsFromSupabase(),
+        getAllVerifiedTalents(),
+      ]);
+      setAllTalents(loadedTalents);
       const currentUser = await getCurrentUser();
 
       if (currentUser) {
@@ -52,34 +58,39 @@ export default function Bookings() {
     }).format(price);
   };
 
-  const getBookingStatus = (booking: SharedBooking): BookingStatus => {
-    // Diperbaiki: hanya mengecek "rejected" karena "cancelled" tidak ada di tipe data SharedBooking asli
+  const getBookingStatus = (booking: SharedBooking): BookingStatus | "pending_mitra" => {
+    if (booking.approvalStatus === "completed") return "completed";
     if (booking.approvalStatus === "rejected") return "cancelled";
 
-    if (booking.approvalStatus === "pending_approval") return "pending_approval";
-    if (booking.paymentStatus === "pending") return "pending_payment";
-
-    if (booking.approvalStatus === "approved") {
+    // Pengecekan tanggal/jam: jika tanggal booking sudah lewat dari sekarang, otomatis "completed"
+    if (booking.date) {
       const now = new Date();
-      const startTime = new Date(`${booking.date}T${booking.time}`);
-      const endTime = new Date(startTime.getTime() + booking.duration * 60 * 60 * 1000);
+      const timeStr = booking.time ? (booking.time.length === 5 ? `${booking.time}:00` : booking.time) : "00:00:00";
+      const startTime = new Date(`${booking.date}T${timeStr}`);
+      const durationHours = booking.duration || 1;
+      const endTime = new Date(startTime.getTime() + durationHours * 60 * 60 * 1000);
 
-      if (endTime < now) {
+      if (!isNaN(endTime.getTime()) && endTime < now) {
         return "completed";
-      } else {
-        return "approved";
       }
     }
 
-    return "pending_approval";
+    if (booking.paymentStatus === "pending") return "pending_payment";
+    if ((booking.approvalStatus as string) === "pending_mitra") return "pending_mitra";
+    if (booking.approvalStatus === "pending_approval") return "pending_approval";
+    if (booking.approvalStatus === "approved") return "approved";
+
+    return "completed";
   };
 
-  const getStatusBadge = (status: BookingStatus) => {
+  const getStatusBadge = (status: BookingStatus | "pending_mitra") => {
     switch (status) {
       case "pending_payment":
         return <Badge variant="warning">Menunggu Pembayaran</Badge>;
       case "pending_approval":
-        return <Badge variant="accent">Menunggu Persetujuan</Badge>;
+        return <Badge variant="accent">Menunggu Persetujuan Admin</Badge>;
+      case "pending_mitra":
+        return <Badge variant="accent">Menunggu Persetujuan Mitra</Badge>;
       case "approved":
         return <Badge variant="success">Disetujui</Badge>;
       case "completed":
@@ -100,12 +111,21 @@ export default function Bookings() {
 
   const activeBookings = bookings.filter((b) => {
     const status = getBookingStatus(b);
-    return status === "approved" || status === "pending_approval" || status === "pending_payment";
+    return status === "approved" || status === "pending_approval" || status === "pending_mitra" || status === "pending_payment";
   });
 
-  const completedBookings = bookings.filter((b) => getBookingStatus(b) === "completed");
+  const completedBookings = bookings.filter((b) => {
+    const status = getBookingStatus(b);
+    return status === "completed" || status === "cancelled";
+  });
 
   const BookingCard = ({ booking }: { booking: SharedBooking }) => {
+    const talent = allTalents.find(
+      (item) => item.id === booking.talentId || item.talentId === booking.talentId
+    );
+    const talentName = talent?.name || booking.talentName || "Talent";
+    const talentPhoto = talent?.photo || booking.talentPhoto || "";
+    const talentCity = talent?.city || "Tidak diketahui";
     const canChat = getBookingStatus(booking) === "approved";
     const bookingStatus = getBookingStatus(booking);
     const canDelete = bookingStatus === "pending_payment" || bookingStatus === "pending_approval";
@@ -114,17 +134,17 @@ export default function Bookings() {
       <Card hover className="overflow-hidden">
         <div className="flex">
           <img
-            src={booking.talentPhoto}
-            alt={booking.talentName}
+            src={talentPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(talentName)}&background=f3f4f6&color=6b7280`}
+            alt={talentName}
             className="w-28 md:w-36 object-cover"
           />
           <div className="flex-1 p-4">
             <div className="flex items-start justify-between mb-2">
               <div>
-                <h3 className="font-bold">{booking.talentName}</h3>
+                <h3 className="font-bold">{talentName}</h3>
                 <div className="flex items-center gap-1 text-sm text-muted-foreground">
                   <MapPin className="w-3 h-3" />
-                  {talents.find(t => t.id === booking.talentId)?.city || "Tidak diketahui"}
+                  {talentCity}
                 </div>
               </div>
               {getStatusBadge(bookingStatus)}
@@ -155,7 +175,7 @@ export default function Bookings() {
               </span>
               <div className="flex gap-2">
                 {bookingStatus === "pending_payment" && (
-                  <Link to={`/booking/${booking.id}`}>
+                  <Link to={`/booking/${booking.talentId}`}>
                     <Button size="sm" variant="hero" className="gap-1">
                       Bayar Sekarang
                     </Button>
@@ -176,7 +196,7 @@ export default function Bookings() {
                   </Link>
                 )}
                 {bookingStatus === "completed" && (
-                  <Link to={`/booking/${booking.id}`}>
+                  <Link to={`/booking/${booking.talentId}`}>
                     <Button size="sm" variant="outline" className="gap-1">
                       <Star className="w-4 h-4" />
                       Beri Ulasan
@@ -195,7 +215,7 @@ export default function Bookings() {
                       <AlertDialogHeader>
                         <AlertDialogTitle>Hapus Pemesanan</AlertDialogTitle>
                         <AlertDialogDescription>
-                          Apakah Anda yakin ingin menghapus pemesanan dengan {booking.talentName}? 
+                          Apakah Anda yakin ingin menghapus pemesanan dengan {talentName}? 
                           Tindakan ini tidak dapat dibatalkan.
                         </AlertDialogDescription>
                       </AlertDialogHeader>

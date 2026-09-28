@@ -21,6 +21,17 @@ export function dicebearAvatar(name: string, gender?: "Wanita" | "Pria", size?: 
   return `https://api.dicebear.com/7.x/${style}/svg?seed=${seed}${size ? `&size=${size}` : ""}`;
 }
 
+/**
+ * Avatar inisial (ui-avatars.com) untuk user tanpa foto. Memakai username/nama
+ * sebagai sumber inisial, dengan fallback "User" agar tidak pernah kosong
+ * (inisial kosong membuat semua user tampil sama).
+ */
+export function initialsAvatar(source?: string, size?: number) {
+  const raw = (source || "").trim();
+  const safeName = raw.length > 0 ? raw : "User";
+  return uiAvatarUrl(safeName, "f3f4f6", "6b7280", size || 256);
+}
+
 
 export function formatPrice(price: number): string {
   return new Intl.NumberFormat("id-ID", {

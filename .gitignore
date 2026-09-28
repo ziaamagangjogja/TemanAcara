@@ -1,6 +1,13 @@
 # Environment variables (SECRET)
 .env
 .env.*
+!.env.example
+# Local QA credentials
+qa-admin.local.mjs
+qa-*.local.mjs
+# Local server uploads and generated QA artifacts
+server/uploads/*
+!server/uploads/.gitkeep
 
 # Logs
 logs

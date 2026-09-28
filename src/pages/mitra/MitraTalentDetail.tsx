@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import { reviews } from "@/data/mockData";
+import { getBookings } from "@/lib/bookingStore";
 
 // PERFORMA: Buat instance Intl.NumberFormat sekali di luar komponen agar tidak dibuat ulang
 const priceFormatter = new Intl.NumberFormat("id-ID", {
@@ -76,31 +77,22 @@ export default function MitraTalentDetail() {
     }
   }, [isLoading, error, talent, navigate]);
 
-  // PERFORMA: Memoisasi perhitungan ulasan untuk mencegah pembacaan localStorage dan parsing berulang
+  // Ambil ulasan dari bookings yang sudah diberi rating (sumber tunggal, selalu akurat)
   const talentReviews = useMemo(() => {
-    let userReviews = [];
-    try {
-      const stored = localStorage.getItem("rentmate_user_reviews");
-      if (stored) {
-        const arr = JSON.parse(stored) as Array<{ bookingId: string; rating: number; comment: string; talentId: string }>;
-        userReviews = arr
-          .filter((r) => r.talentId === id)
-          .map((r, idx) => ({
-            id: `ur_${idx}_${r.bookingId}`,
-            talentId: r.talentId,
-            userName: "Anda",
-            userPhoto: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face",
-            rating: r.rating,
-            comment: r.comment,
-            date: new Date().toISOString(),
-          }));
-      }
-    } catch {
-      // Handle error silently
-    }
-    
-    return [...reviews.filter((r) => r.talentId === id), ...userReviews];
-  }, [id]); // Hanya dihitung ulang jika id berubah
+    const bookings = getBookings();
+    const ratedBookings = bookings.filter(
+      (b) => (b.talentId === id) && typeof b.rating === "number" && b.rating > 0
+    );
+    return ratedBookings.map((b) => ({
+      id: `booking_review_${b.id}`,
+      talentId: b.talentId,
+      userName: b.userName || "Pengguna",
+      userPhoto: b.userPhoto || "",
+      rating: b.rating as number,
+      comment: b.ratingComment || "",
+      date: b.createdAt,
+    }));
+  }, [id]);
 
   // PERFORMA: Bungkus event handler dengan useCallback
   const handleGoBack = useCallback(() => {

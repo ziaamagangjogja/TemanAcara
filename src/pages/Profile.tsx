@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   User,
@@ -20,6 +20,7 @@ import {
   CheckCircle,
   Eye,
   RefreshCw,
+  HeartHandshake,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -30,15 +31,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { RatingModal } from "@/components/RatingModal";
 import { talents } from "@/data/mockData";
+import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  getCurrentUser, 
-  updateCurrentUser, 
-  UserProfile, 
+import {
+  getCurrentUser,
+  updateCurrentUser,
+  UserProfile,
   markAllNotificationsRead
 } from "@/lib/userStore";
-import { getBookings, refreshBookingsFromSupabase } from "@/lib/bookingStore";
-import { dicebearAvatar } from "@/lib/utils";
+import { getBookings, refreshBookingsFromSupabase, updateBookingRating } from "@/lib/bookingStore";
+import { dicebearAvatar, initialsAvatar } from "@/lib/utils";
+import { compressImageFile } from "@/utils/imageCompressor";
 
 const TOP_UP_OPTIONS = [50000, 100000, 250000];
 
@@ -47,11 +50,11 @@ export default function Profile() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("bookings");
   const [isEditing, setIsEditing] = useState(false);
-  
+
   const [userData, setUserData] = useState<UserProfile | null>(null);
   const [editData, setEditData] = useState<UserProfile | null>(null);
   const [isLoadingUser, setIsLoadingUser] = useState(true);
-  
+
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
@@ -65,6 +68,20 @@ export default function Profile() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Daftar talent dari database (mitra asli), digabung dengan data dummy.
+  // Ini penting agar booking ke mitra asli (mis. Yasmin) tetap tampil.
+  const [dbTalents, setDbTalents] = useState<any[]>([]);
+
+  // Cari talent dari data DB dulu, baru fallback ke data dummy.
+  const findTalent = useCallback(
+    (id: string): any | undefined => {
+      const fromDb = dbTalents.find((t) => t.id === id);
+      if (fromDb) return fromDb;
+      return talents.find((t) => t.id === id);
+    },
+    [dbTalents]
+  );
+
   const [ratingModal, setRatingModal] = useState<{
     isOpen: boolean;
     talentId: string;
@@ -72,8 +89,8 @@ export default function Profile() {
   }>({ isOpen: false, talentId: "", bookingId: "" });
   const [ratedBookings, setRatedBookings] = useState<string[]>([]);
   const [ratedDetails, setRatedDetails] = useState<Record<string, { rating: number; comment: string; talentId: string }>>({});
-  
-  const notifications = userData?.notifications || [];
+
+  const notifications = useMemo(() => userData?.notifications || [], [userData?.notifications]);
 
   const loadUserData = useCallback(async () => {
     try {
@@ -94,19 +111,19 @@ export default function Profile() {
     try {
       const allBookings = await refreshBookingsFromSupabase();
       const currentUser = await getCurrentUser();
-      
+
       if (!currentUser) {
         setBookings([]);
         setIsLoadingBookings(false);
         return;
       }
-      
+
       const matchesCurrentUserBooking = (booking: any) => {
         return booking.userId === currentUser.id;
       };
 
       let userBookings: any[] = allBookings.filter(matchesCurrentUserBooking);
-      
+
       setBookings(userBookings);
     } catch (error) {
       console.error("Error loading user bookings:", error);
@@ -129,7 +146,17 @@ export default function Profile() {
   useEffect(() => {
     loadUserData();
     loadUserBookings();
-    
+
+    // Muat daftar talent dari database agar booking ke mitra asli
+    // (mis. Yasmin) tetap dapat ditampilkan di riwayat.
+    getAllVerifiedTalents()
+      .then((list) => {
+        setDbTalents(Array.isArray(list) ? list : []);
+      })
+      .catch((e) => {
+        console.error("Gagal memuat talent dari database:", e);
+      });
+
     try {
       const stored = localStorage.getItem("rentmate_user_reviews");
       if (stored) {
@@ -173,7 +200,7 @@ export default function Profile() {
       }
     }
     checkNotifications();
-  }, [activeTab, notifications]); 
+  }, [activeTab, notifications]);
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -225,14 +252,20 @@ export default function Profile() {
     navigate("/login");
   };
 
-  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPhotoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      try {
+        const compressedBase64 = await compressImageFile(file);
+        setPhotoPreview(compressedBase64);
+      } catch (err) {
+        console.error("Gagal mengkompresi gambar:", err);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setPhotoPreview(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 
@@ -267,9 +300,9 @@ export default function Profile() {
   };
 
   const menuItems = [
-    { 
-      icon: Bell, 
-      label: "Notifikasi", 
+    {
+      icon: Bell,
+      label: "Notifikasi",
       action: async () => {
         setActiveTab("notifications");
         if (notifications.some((n) => !n.read)) {
@@ -282,22 +315,27 @@ export default function Profile() {
       },
       badge: notifications.filter(n => !n.read).length
     },
-    { 
-      icon: Settings, 
-      label: "Pengaturan", 
+    {
+      icon: Settings,
+      label: "Pengaturan",
       action: () => {
         handleEditClick();
       }
     },
-    { 
-      icon: HelpCircle, 
-      label: "Bantuan", 
-      path: "/faq" 
+    {
+      icon: HeartHandshake,
+      label: "Jadi Mitra / Talent",
+      path: "/mitra"
     },
-    { 
-      icon: FileText, 
-      label: "Syarat & Ketentuan", 
-      path: "/syarat-ketentuan" 
+    {
+      icon: HelpCircle,
+      label: "Bantuan",
+      path: "/faq"
+    },
+    {
+      icon: FileText,
+      label: "Syarat & Ketentuan",
+      path: "/syarat-ketentuan"
     },
   ];
 
@@ -329,12 +367,12 @@ export default function Profile() {
           <div className="flex flex-col md:flex-row items-center gap-6">
             <div className="relative group cursor-pointer" onClick={() => setIsPhotoModalOpen(true)}>
               <img
-                src={userData.photo || dicebearAvatar(userData.name, "Wanita", 128)}
+                src={userData.photo || initialsAvatar(userData.username || userData.name, 128)}
                 alt={userData.name}
                 className="w-24 h-24 md:w-32 md:h-32 rounded-full object-cover ring-4 ring-primary/20 transition-all group-hover:ring-primary/50"
                 onError={(e) => {
                   e.currentTarget.onerror = null;
-                  e.currentTarget.src = dicebearAvatar(userData.name, "Wanita", 128);
+                  e.currentTarget.src = initialsAvatar(userData.username || userData.name, 128);
                 }}
               />
               <div className="absolute inset-0 bg-black/20 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -400,7 +438,7 @@ export default function Profile() {
                       />
                     </div>
                   </div>
-                  
+
                   <div>
                     <label className="text-sm font-medium mb-2 block">Bio Singkat</label>
                     <Textarea
@@ -522,10 +560,10 @@ export default function Profile() {
           <TabsContent value="bookings" className="space-y-4">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Riwayat Pemesanan</h2>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="gap-2" 
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
                 onClick={handleRefreshBookings}
                 disabled={isRefreshing}
               >
@@ -537,14 +575,14 @@ export default function Profile() {
                 Refresh
               </Button>
             </div>
-            
+
             {isLoadingBookings ? (
               <div className="flex items-center justify-center h-32">
                 <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : bookings.length > 0 ? (
               bookings.map((booking) => {
-                const talent = talents.find((t) => t.id === booking.talentId);
+                const talent = findTalent(booking.talentId);
                 if (!talent) return null;
 
                 return (
@@ -602,9 +640,9 @@ export default function Profile() {
                             </span>
                             {(booking.status === "completed" || booking.approvalStatus === "completed") ? (
                               !ratedBookings.includes(booking.id) ? (
-                                <Button 
+                                <Button
                                   variant="hero"
-                                  size="sm" 
+                                  size="sm"
                                   className="gap-1 cursor-pointer"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -635,16 +673,16 @@ export default function Profile() {
                               </Button>
                             )}
                             {(booking.status === "upcoming" || booking.approvalStatus === "approved") && (
-                              <Button 
+                              <Button
                                 size="sm"
                                 onClick={(e) => handleNavigateToChat(e, booking)}
                               >
                                 Obrolan
                               </Button>
                             )}
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               className="gap-1 text-muted-foreground"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -760,11 +798,21 @@ export default function Profile() {
           <RatingModal
             isOpen={ratingModal.isOpen}
             onClose={() => setRatingModal({ isOpen: false, talentId: "", bookingId: "" })}
-            talentName={talents.find((t) => t.id === ratingModal.talentId)?.name || ""}
-            talentPhoto={talents.find((t) => t.id === ratingModal.talentId)?.photo || ""}
+            talentName={findTalent(ratingModal.talentId)?.name || ""}
+            talentPhoto={findTalent(ratingModal.talentId)?.photo || ""}
             bookingId={ratingModal.bookingId}
-            onSubmit={(rating, comment) => {
+            onSubmit={async (rating, comment) => {
               const entry = { bookingId: ratingModal.bookingId, rating, comment, talentId: ratingModal.talentId };
+              const updatedBooking = await updateBookingRating(ratingModal.bookingId, rating, comment);
+              if (!updatedBooking) {
+                toast({
+                  title: "Rating gagal disimpan",
+                  description: "Rating belum tersimpan ke server. Silakan coba lagi.",
+                  variant: "destructive",
+                });
+                return;
+              }
+
               setRatedBookings((prev) => [...prev, ratingModal.bookingId]);
               setRatedDetails((prev) => ({ ...prev, [ratingModal.bookingId]: { rating, comment, talentId: ratingModal.talentId } }));
               try {
@@ -786,12 +834,13 @@ export default function Profile() {
             <div className="flex flex-col items-center gap-6 py-4">
               <div className="relative">
                 <img
-                  src={photoPreview || userData.photo}
+                  src={photoPreview || userData.photo || initialsAvatar(userData.username || userData.name, 128)}
                   alt="Preview"
-                  className="w-32 h-32 rounded-full object-cover ring-4 ring-primary/20"
+                  className="w-32 h-32 rounded-full object-cover ring-4 ring-primary/20 cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => document.getElementById("profile-upload-input")?.click()}
                   onError={(e) => {
                     e.currentTarget.onerror = null;
-                    e.currentTarget.src = dicebearAvatar(userData.name, "Wanita", 128);
+                    e.currentTarget.src = initialsAvatar(userData.username || userData.name, 128);
                   }}
                 />
               </div>
@@ -799,9 +848,10 @@ export default function Profile() {
                 <label className="block text-sm font-medium mb-2 text-center">
                   Pilih Foto Baru
                 </label>
-                <Input 
-                  type="file" 
-                  accept="image/*" 
+                <Input
+                  id="profile-upload-input"
+                  type="file"
+                  accept="image/*"
                   onChange={handlePhotoFileChange}
                   className="cursor-pointer"
                 />
@@ -879,10 +929,10 @@ export default function Profile() {
               <div className="space-y-6">
                 <div className="flex items-center gap-4 mb-4">
                   <div className="flex items-center gap-3 flex-1">
-                    <img 
-                      src={userData.photo} 
-                      alt={userData.name} 
-                      className="w-12 h-12 rounded-full object-cover border-2 border-background shadow" 
+                    <img
+                      src={userData.photo}
+                      alt={userData.name}
+                      className="w-12 h-12 rounded-full object-cover border-2 border-background shadow"
                     />
                     <div>
                       <p className="text-xs text-muted-foreground">Pengguna</p>
@@ -897,11 +947,11 @@ export default function Profile() {
                   <div className="flex items-center gap-3 flex-1 justify-end">
                     <div className="text-right">
                       <p className="text-xs text-muted-foreground">Teman</p>
-                      <h3 className="font-bold">{talents.find(t => t.id === selectedTransaction.talentId)?.name}</h3>
+                      <h3 className="font-bold">{findTalent(selectedTransaction.talentId)?.name}</h3>
                     </div>
-                    <img 
-                      src={talents.find(t => t.id === selectedTransaction.talentId)?.photo} 
-                      alt={talents.find(t => t.id === selectedTransaction.talentId)?.name} 
+                    <img
+                      src={findTalent(selectedTransaction.talentId)?.photo}
+                      alt={findTalent(selectedTransaction.talentId)?.name} 
                       className="w-12 h-12 rounded-full object-cover border-2 border-background shadow" 
                     />
                   </div>
@@ -972,6 +1022,13 @@ export default function Profile() {
                         onClick={() => window.open(selectedTransaction.paymentProof, "_blank")} 
                       />
                     </div>
+                  </div>
+                )}
+                
+                {selectedTransaction.notes && (
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <p className="text-sm font-semibold mb-2">Catatan Tambahan</p>
+                    <p className="text-sm">{selectedTransaction.notes}</p>
                   </div>
                 )}
               </div>
