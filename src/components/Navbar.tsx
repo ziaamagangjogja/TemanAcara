@@ -1,9 +1,20 @@
 import { useState, useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { Home, Users, Calendar, MessageCircle, User, Menu, X, HeartHandshake } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Home, Users, Calendar, MessageCircle, User, Menu, X, HeartHandshake, Bell, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { getCurrentUser, subscribeToUser, UserProfile } from "@/lib/userStore";
+import { getBookings, subscribeToBookings } from "@/lib/bookingStore";
 import { useAppSettings } from "@/contexts/AppSettingsContext";
 
 const userNavItems = [
@@ -16,7 +27,10 @@ const userNavItems = [
 
 export function Navbar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
+  const [activeBookingCount, setActiveBookingCount] = useState(0);
   const [user, setUser] = useState<UserProfile | null>(null);
   const { settings } = useAppSettings();
 
@@ -43,9 +57,57 @@ export function Navbar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!user) {
+      setActiveBookingCount(0);
+      return;
+    }
+
+    const updateActiveBookings = () => {
+      const now = new Date();
+      const activeBookings = getBookings().filter((booking) => {
+        if (booking.userId !== user.id || booking.approvalStatus === "completed" || booking.approvalStatus === "rejected") {
+          return false;
+        }
+
+        if (booking.date) {
+          const timeStr = booking.time ? (booking.time.length === 5 ? `${booking.time}:00` : booking.time) : "00:00:00";
+          const startTime = new Date(`${booking.date}T${timeStr}`);
+          const endTime = new Date(startTime.getTime() + (booking.duration || 1) * 60 * 60 * 1000);
+          if (!isNaN(endTime.getTime()) && endTime < now) return false;
+        }
+
+        return booking.paymentStatus === "pending" ||
+          booking.approvalStatus === "pending_approval" ||
+          booking.approvalStatus === "pending_mitra" ||
+          booking.approvalStatus === "approved";
+      });
+      setActiveBookingCount(activeBookings.length);
+    };
+
+    updateActiveBookings();
+    const unsubscribe = subscribeToBookings(updateActiveBookings);
+    return unsubscribe;
+  }, [user]);
+
   const isAuthPage = location.pathname === "/login" || location.pathname === "/register";
   const displayUser = isAuthPage ? null : user;
   const visibleNavItems = userNavItems.filter(item => !item.requiresAuth || displayUser);
+  const unreadNotifications = displayUser?.notifications?.filter((notification) => !notification.read).length || 0;
+
+  const handleLogout = () => {
+    setIsLogoutDialogOpen(true);
+  };
+
+  const confirmLogout = () => {
+    localStorage.removeItem("rentmate_current_username");
+    localStorage.removeItem("rentmate_current_user");
+    window.dispatchEvent(new CustomEvent("userUpdated"));
+    setUser(null);
+    setIsLogoutDialogOpen(false);
+    setMobileMenuOpen(false);
+    navigate("/login");
+  };
 
   if (location.pathname === "/admin" || location.pathname === "/admin-login") {
     return null;
@@ -73,8 +135,20 @@ export function Navbar() {
                     size="sm"
                     className={cn("gap-2", isActive && "text-primary font-semibold")}
                   >
-                    <Icon className="w-4 h-4" />
+                    <span className="relative">
+                      <Icon className="w-4 h-4" />
+                      {item.path === "/bookings" && activeBookingCount > 0 && (
+                        <span className="absolute -right-3 -top-3 min-w-4 h-4 px-1 rounded-full bg-green-500 text-white text-[9px] font-bold flex items-center justify-center">
+                          {activeBookingCount}/5
+                        </span>
+                      )}
+                    </span>
                     {item.label}
+                    {item.path === "/bookings" && activeBookingCount > 0 && (
+                      <span className="hidden lg:inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-700">
+                        Aktif {activeBookingCount}/5
+                      </span>
+                    )}
                   </Button>
                 </Link>
               );
@@ -82,6 +156,18 @@ export function Navbar() {
           </div>
 
           <div className="flex items-center gap-2">
+            {displayUser && !isAuthPage && (
+              <Link to="/profile?tab=notifications" aria-label="Notifikasi" className="relative">
+                <Button variant="ghost" size="icon" className="relative">
+                  <Bell className="w-5 h-5" />
+                  {unreadNotifications > 0 && (
+                    <span className="absolute -right-1 -top-1 min-w-5 h-5 px-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                    </span>
+                  )}
+                </Button>
+              </Link>
+            )}
             {!isAuthPage && (
               <Link to="/mitra">
                 <Button variant="outline" size="sm" className="gap-2">
@@ -89,6 +175,12 @@ export function Navbar() {
                   Jadi Mitra
                 </Button>
               </Link>
+            )}
+            {displayUser && !isAuthPage && (
+              <Button variant="ghost" size="sm" className="gap-2" onClick={handleLogout}>
+                <LogOut className="w-4 h-4" />
+                Keluar
+              </Button>
             )}
             {!displayUser && !isAuthPage && (
               <Link to="/login">
@@ -120,12 +212,31 @@ export function Navbar() {
                 return (
                   <Link key={item.path} to={item.path} onClick={() => setMobileMenuOpen(false)}>
                     <div className={cn("flex items-center gap-3 p-3 rounded-xl transition-colors", isActive ? "bg-accent text-primary" : "hover:bg-secondary")}>
-                      <Icon className="w-5 h-5" />
+                      <span className="relative">
+                        <Icon className="w-5 h-5" />
+                        {item.path === "/bookings" && activeBookingCount > 0 && (
+                          <span className="absolute -right-3 -top-2 min-w-4 h-4 px-1 rounded-full bg-green-500 text-white text-[9px] font-bold flex items-center justify-center">
+                            {activeBookingCount}/5
+                          </span>
+                        )}
+                      </span>
                       <span className="font-medium">{item.label}</span>
+                      {item.path === "/bookings" && activeBookingCount > 0 && (
+                        <span className="ml-auto rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-700">Aktif {activeBookingCount}/5</span>
+                      )}
                     </div>
                   </Link>
                 );
               })}
+              {displayUser && !isAuthPage && (
+                <Link to="/profile" onClick={() => setMobileMenuOpen(false)}>
+                  <div className="flex items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary">
+                    <Bell className="w-5 h-5" />
+                    <span className="font-medium">Notifikasi</span>
+                    {unreadNotifications > 0 && <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center">{unreadNotifications > 99 ? "99+" : unreadNotifications}</span>}
+                  </div>
+                </Link>
+              )}
               {!isAuthPage && (
                 <Link to="/mitra" onClick={() => setMobileMenuOpen(false)}>
                   <div className="flex items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary">
@@ -133,6 +244,12 @@ export function Navbar() {
                     <span className="font-medium">Jadi Mitra</span>
                   </div>
                 </Link>
+              )}
+              {displayUser && !isAuthPage && (
+                <button type="button" onClick={() => { setMobileMenuOpen(false); handleLogout(); }} className="flex w-full items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary text-left">
+                  <LogOut className="w-5 h-5" />
+                  <span className="font-medium">Keluar</span>
+                </button>
               )}
               {!displayUser && !isAuthPage && (
                 <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
@@ -164,6 +281,21 @@ export function Navbar() {
           })}
         </div>
       </nav>
+
+      <AlertDialog open={isLogoutDialogOpen} onOpenChange={setIsLogoutDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Yakin ingin keluar?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sesi kamu akan diakhiri dan kamu perlu masuk kembali untuk mengakses fitur akun.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmLogout}>Ya, Keluar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

@@ -17,10 +17,11 @@ export interface SharedBooking {
   time: string;
   duration: number;
   total: number;
+  meetingCity?: string;
   notes?: string;
 
-  paymentStatus: "pending" | "paid";
-  approvalStatus: "pending_approval" | "pending_mitra" | "approved" | "rejected" | "completed";
+  paymentStatus: "pending" | "paid" | "refund_pending" | "refunded";
+  approvalStatus: "pending_approval" | "pending_mitra" | "approved" | "rejected" | "completed" | "expired";
 
   paymentMethod?: "qris" | "bca" | "bri" | "mandiri" | "saldo";
   paymentCode?: string;
@@ -133,6 +134,7 @@ async function fetchBookingsFromSupabase(): Promise<SharedBooking[]> {
         time: String(item.time || "").slice(0, 8),
         duration: item.duration || 1,
         total: item.total || 0,
+        meetingCity: item.meeting_city || item.city || "",
         notes: item.notes || "",
         paymentStatus: item.payment_status || "pending",
         approvalStatus: item.approval_status || "pending_approval",
@@ -236,6 +238,7 @@ export async function addBooking(
     time: booking.time,
     duration: booking.duration,
     total: booking.total,
+    meeting_city: booking.meetingCity || booking.talentCity || "",
     notes: booking.notes || booking.adminMessage || "",
     payment_status: booking.paymentStatus,
     approval_status: booking.approvalStatus,
@@ -265,6 +268,7 @@ export async function addBooking(
     time: booking.time,
     duration: booking.duration,
     total: booking.total,
+    meetingCity: booking.meetingCity || booking.talentCity || "",
     notes: booking.notes || booking.adminMessage || "",
     paymentStatus: booking.paymentStatus,
     approvalStatus: booking.approvalStatus,
@@ -277,6 +281,12 @@ export async function addBooking(
   };
 
   await fetchBookingsFromSupabase();
+  addNotificationForUser(userId, {
+    title: "Pesanan Berhasil Dibuat 📅",
+    message: `Pesananmu dengan ${booking.talentName || "mitra"} untuk "${booking.purpose}" berhasil dibuat dan menunggu proses pembayaran/verifikasi.`,
+    type: "booking"
+  });
+
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("bookingsUpdated"));
   }
@@ -290,7 +300,7 @@ export async function updateBookingPayment(
   data: {
     paymentMethod: "qris" | "bca" | "bri" | "mandiri" | "saldo";
     paymentCode: string;
-    paymentProof?: string; 
+    paymentProof?: string;
     transferAmount?: number;
     transferTime: string;
   }
@@ -416,7 +426,7 @@ export async function updateBookingApproval(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ wallet: newWallet })
         });
-        
+
         // Peringatan ke user jika ini sedang login sebagai user tersebut
         const currentUserStr = localStorage.getItem("rentmate_current_username");
         if (currentUserStr === user.username) {
@@ -428,23 +438,35 @@ export async function updateBookingApproval(
     }
   }
 
-  // Hanya update approval_status di database agar aman dari error kolom yang belum ada
-  const response = await fetch(`/api/bookings/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approval_status: status })
-  });
+  // Update approval_status di database
+  try {
+    const response = await fetch(`/api/bookings/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approval_status: status })
+    });
 
-  if (!response.ok) {
-    console.error("Gagal update approval di API");
-    alert("Gagal memperbarui status");
-    return undefined;
+    if (!response.ok) {
+      // Coba verifikasi apakah update sebenarnya berhasil dengan refresh data
+      console.warn("API response tidak ok, mencoba verifikasi data terkini...");
+    }
+  } catch (e) {
+    console.error("Error saat update approval:", e);
+    // Jangan throw — lanjut refresh data untuk verifikasi
   }
 
+  // Update cache lokal optimistik
   target.approvalStatus = status;
 
+  // Refresh dari server untuk konfirmasi
   await fetchBookingsFromSupabase();
   const refreshedBooking = cachedBookings.find(b => b.id === id) || target;
+
+  // Verifikasi apakah update benar-benar berhasil
+  if (refreshedBooking.approvalStatus !== status) {
+    console.error("Gagal memperbarui status booking di server");
+    return undefined;
+  }
 
   if (status === "approved") {
     getOrCreateChatSession(refreshedBooking);
@@ -454,6 +476,33 @@ export async function updateBookingApproval(
           detail: { booking: refreshedBooking, timestamp: new Date().toISOString() },
         })
       );
+      // Kirim notifikasi ke user
+      addNotificationForUser(refreshedBooking.userId, {
+        title: "Pesanan Disetujui Mitra! 🎉",
+        message: `Pesananmu dengan ${refreshedBooking.talentName} untuk "${refreshedBooking.purpose}" telah disetujui. Kamu sekarang bisa mulai mengobrol!`,
+        type: "booking"
+      });
+    }
+  } else if (status === "pending_mitra") {
+    if (typeof window !== "undefined") {
+      addNotificationForUser(refreshedBooking.userId, {
+        title: "Pembayaran Dikonfirmasi Admin ✅",
+        message: `Pembayaranmu telah diverifikasi. Pesanan diteruskan ke Mitra (${refreshedBooking.talentName}) untuk persetujuan akhir.`,
+        type: "payment"
+      });
+    }
+  } else if (status === "rejected") {
+    if (typeof window !== "undefined") {
+      addNotificationForUser(refreshedBooking.userId, {
+        title: "Pesanan Ditolak",
+        message: `Maaf, pesananmu dengan ${refreshedBooking.talentName} untuk "${refreshedBooking.purpose}" ditolak. Dana akan dikembalikan jika sudah dibayar.`,
+        type: "booking"
+      });
+      addNotificationForUser(refreshedBooking.talentId, {
+        title: "Permintaan Booking Ditolak",
+        message: `Permintaan booking dari ${refreshedBooking.userName || "pengguna"} untuk "${refreshedBooking.purpose}" telah ditolak.`,
+        type: "booking"
+      });
     }
   }
 
@@ -463,6 +512,37 @@ export async function updateBookingApproval(
 
   return refreshedBooking;
 }
+
+// Helper: simpan notifikasi untuk user tertentu ke DB (dan localStorage sebagai fallback)
+export function addNotificationForUser(userId: string, notif: { title: string; message: string; type: "payment" | "booking" | "admin" }) {
+  if (!userId) return;
+  const id = String(Date.now());
+  // Persist to DB
+  fetch('/api/notifications', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, userId, title: notif.title, message: notif.message, type: notif.type })
+  }).catch(() => {
+    // Fallback: localStorage jika API tidak tersedia
+    try {
+      const key = `rentmate_notifications_${userId}`;
+      const existing = JSON.parse(localStorage.getItem(key) || "[]") as any[];
+      existing.unshift({
+        id,
+        ...notif,
+        time: new Date().toLocaleString("id-ID"),
+        read: false,
+      });
+      localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
+    } catch (e) {
+      console.error("Gagal menyimpan notifikasi ke localStorage:", e);
+    }
+  });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("notificationsUpdated"));
+  }
+}
+
 
 // MARK AS COMPLETED
 export async function markBookingAsCompleted(id: string): Promise<SharedBooking | undefined> {
@@ -479,8 +559,23 @@ export async function markBookingAsCompleted(id: string): Promise<SharedBooking 
     console.error("Gagal menyelesaikan booking di API");
     return undefined;
   }
+  const result = await response.json();
+  if (result.changed === false) {
+    await fetchBookingsFromSupabase();
+    return cachedBookings.find(booking => booking.id === id);
+  }
 
   target.approvalStatus = "completed";
+  addNotificationForUser(target.userId, {
+    title: "Pesanan Selesai ✅",
+    message: `Pesananmu dengan ${target.talentName || "mitra"} untuk "${target.purpose}" telah selesai. Terima kasih telah menggunakan RentMate!`,
+    type: "booking"
+  });
+  addNotificationForUser(target.talentId, {
+    title: "Booking Selesai ✅",
+    message: `Booking dengan ${target.userName || "pengguna"} untuk "${target.purpose}" telah selesai.`,
+    type: "booking"
+  });
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(
@@ -501,6 +596,12 @@ export function getPendingBookings(): SharedBooking[] {
   );
 }
 
+export function getRefundPendingBookings(): SharedBooking[] {
+  return cachedBookings.filter(
+    booking => booking.approvalStatus === "expired" && booking.paymentStatus === "refund_pending"
+  );
+}
+
 export function getActiveBookingByTalent(talentId: string): SharedBooking | undefined {
   const now = new Date();
   return cachedBookings.find(b => {
@@ -513,7 +614,7 @@ export function getActiveBookingByTalent(talentId: string): SharedBooking | unde
 export function subscribeToBookings(cb: () => void): () => void {
   if (!isBrowser()) return () => {};
   window.addEventListener("bookingsUpdated", cb);
-  
+
   const interval = setInterval(async () => {
     await fetchBookingsFromSupabase();
     cb();
@@ -553,7 +654,7 @@ export async function updateBookingRating(
 
 export function calculateMitraEarnings(mitraId: string, isTalentMode: boolean = true): number {
   const commissionPercentage = getAppCommission();
-  const mitraBookings = cachedBookings.filter(booking => 
+  const mitraBookings = cachedBookings.filter(booking =>
     isTalentMode ? booking.talentId === mitraId : booking.userId === mitraId
   );
 
@@ -604,19 +705,32 @@ export async function checkAndUpdateCompletedBookings(): Promise<void> {
   if (bookingsToComplete.length === 0) return;
 
   const results = await Promise.all(
-    bookingsToComplete.map(booking =>
-      fetch(`/api/bookings/${booking.id}`, {
+    bookingsToComplete.map(async booking => {
+      const response = await fetch(`/api/bookings/${booking.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ approval_status: "completed" })
-      })
-    )
+      });
+      if (!response.ok) return false;
+      const result = await response.json();
+      return result.changed === true;
+    })
   );
 
   let changed = false;
   results.forEach((result, index) => {
-    if (result.ok) {
+    if (result) {
       bookingsToComplete[index].approvalStatus = "completed";
+      addNotificationForUser(bookingsToComplete[index].userId, {
+        title: "Pesanan Selesai ✅",
+        message: `Pesananmu dengan ${bookingsToComplete[index].talentName || "mitra"} untuk "${bookingsToComplete[index].purpose}" telah selesai.`,
+        type: "booking"
+      });
+      addNotificationForUser(bookingsToComplete[index].talentId, {
+        title: "Booking Selesai ✅",
+        message: `Booking dengan ${bookingsToComplete[index].userName || "pengguna"} untuk "${bookingsToComplete[index].purpose}" telah selesai.`,
+        type: "booking"
+      });
       changed = true;
     }
   });
@@ -693,8 +807,12 @@ export async function updateBooking(id: string, data: Partial<SharedBooking>): P
 export function isTimeSlotBooked(talentId: string, date: string, time: string, duration: number, excludeBookingId?: string): boolean {
   return cachedBookings.some(booking => {
     if (booking.id === excludeBookingId) return false;
-    if (booking.talentId !== talentId) return false;
-    if (booking.approvalStatus === "rejected") return false;
+    if (String(booking.talentId) !== String(talentId)) return false;
+    if (booking.approvalStatus === "rejected" || booking.approvalStatus === "expired") return false;
+    // Blokir semua status yang sedang diproses: pending_payment, pending_approval, dan approved
+    // Ini mencegah user lain memesan di jam yang sama meskipun pesanan sebelumnya belum lunas.
+    const blockedStatuses = ["pending_payment", "pending_approval", "approved", "pending_mitra"];
+    if (!blockedStatuses.includes(booking.approvalStatus as string) && booking.paymentStatus !== "paid") return false;
 
     // Abaikan booking "hantu"/rusak yang tidak punya waktu valid.
     // Ini mencegah booking lama yang data-nya tidak lengkap memblokir slot.
@@ -721,6 +839,16 @@ export function isTimeSlotBooked(talentId: string, date: string, time: string, d
       (newStartTime <= bookingStartTime && newEndTime >= bookingEndTime)
     );
   });
+}
+
+export function isBookingOngoing(booking: SharedBooking): boolean {
+  if (booking.approvalStatus !== "approved") return false;
+  const startTime = new Date(`${booking.date}T${String(booking.time).slice(0, 5)}`);
+  if (isNaN(startTime.getTime())) return false;
+  const endTime = new Date(startTime);
+  endTime.setHours(endTime.getHours() + booking.duration);
+  const now = new Date();
+  return now >= startTime && now < endTime;
 }
 
 // Cek apakah MITRA PEMESAN (bookerId) sendiri sudah punya jadwal yang bentrok

@@ -26,7 +26,17 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import {
   SharedBooking,
@@ -70,7 +80,7 @@ type Chat = {
   lastMessage: string;
   lastMessageTime: Date;
   messages: Message[];
-  bookingStatus: "pending" | "pending_mitra" | "approved" | "completed" | "cancelled" | "active" | "rejected";
+  bookingStatus: "pending" | "pending_mitra" | "approved" | "completed" | "cancelled" | "active" | "rejected" | "expired";
   bookingDate: string;
   bookingTime: string;
   bookingDuration: number;
@@ -109,6 +119,8 @@ export default function MitraDashboard() {
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Helper untuk mendapatkan data mitra berdasarkan mode
@@ -138,7 +150,7 @@ export default function MitraDashboard() {
         ? allBookings.filter(
             (booking) =>
               booking.talentId === currentMitraData.talentId &&
-              booking.approvalStatus === "pending_approval"
+              (booking.approvalStatus === "pending_approval" || booking.approvalStatus === "pending_mitra")
           )
         : [];
       const pendingIds = pendingBookings.map((booking) => booking.id);
@@ -200,8 +212,10 @@ export default function MitraDashboard() {
         bookingEndTime.setHours(bookingEndTime.getHours() + booking.duration);
         const now = new Date();
 
-        let status: "pending" | "pending_mitra" | "approved" | "completed" | "cancelled" | "active" | "rejected";
-        if (booking.approvalStatus === "rejected") {
+        let status: "pending" | "pending_mitra" | "approved" | "completed" | "cancelled" | "active" | "rejected" | "expired";
+        if (booking.approvalStatus === "expired") {
+          status = "expired";
+        } else if (booking.approvalStatus === "rejected") {
           status = "rejected";
         } else if (booking.approvalStatus === "pending_mitra") {
           // Admin sudah verifikasi; kini giliran Mitra menyetujui/menolak.
@@ -362,6 +376,7 @@ export default function MitraDashboard() {
     localStorage.removeItem("mitraAuthenticated");
     localStorage.removeItem("rentmate_current_mitra");
     toast({ title: "Logout Berhasil", description: "Anda telah keluar dari Dashboard Mitra" });
+    setIsLogoutDialogOpen(false);
     navigate("/mitra/login");
   };
 
@@ -592,6 +607,12 @@ export default function MitraDashboard() {
     );
   }, [chats, searchQuery]);
 
+  const approvalBookings = useMemo(() => {
+    return activeMode === "talent"
+      ? bookings.filter((booking) => booking.approvalStatus === "pending_approval" || booking.approvalStatus === "pending_mitra")
+      : [];
+  }, [activeMode, bookings]);
+
   // --- RENDER ---
   return (
     <div className="min-h-screen bg-gradient-warm">
@@ -619,6 +640,61 @@ export default function MitraDashboard() {
               </Button>
             </div>
 
+            <Popover open={isNotificationOpen} onOpenChange={(open) => {
+              setIsNotificationOpen(open);
+              if (open) markPendingBookingsAsSeen();
+            }}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="icon" className="relative" aria-label="Notifikasi pesanan">
+                  <Bell className="w-4 h-4" />
+                  {pendingBookingCount > 0 && (
+                    <span className="absolute -right-1 -top-1 min-w-5 h-5 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center">
+                      {pendingBookingCount > 99 ? "99+" : pendingBookingCount}
+                    </span>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-[min(24rem,calc(100vw-2rem))] p-0">
+                <div className="border-b px-4 py-3">
+                  <p className="font-semibold">Pesanan Menunggu</p>
+                  <p className="text-xs text-muted-foreground">Tinjau dan jawab pesanan dari pelanggan.</p>
+                </div>
+                <div className="max-h-[min(28rem,70vh)] overflow-y-auto">
+                  {approvalBookings.length > 0 ? approvalBookings.map((booking) => (
+                    <div key={booking.id} className="border-b p-4 last:border-b-0">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{booking.userName || "Pelanggan"}</p>
+                          <p className="mt-1 text-sm text-muted-foreground">{booking.purpose}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {formatBookingDate(booking.date)} · {booking.time.slice(0, 5)} · {booking.duration} jam
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {booking.approvalStatus === "pending_mitra" ? "Pembayaran diverifikasi admin" : "Menunggu persetujuan"}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-sm font-semibold">{formatPrice(booking.total)}</span>
+                      </div>
+                      <div className="mt-3 flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setIsNotificationOpen(false);
+                            navigate("/mitra/pengaturan", { state: { openBookingId: booking.id } });
+                          }}
+                        >
+                          Lihat Pesanan
+                        </Button>
+                      </div>
+                    </div>
+                  )) : (
+                    <p className="px-4 py-8 text-center text-sm text-muted-foreground">Tidak ada pesanan yang menunggu persetujuan.</p>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+
             <div className="hidden sm:flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center">
                 <User className="w-4 h-4" />
@@ -639,7 +715,7 @@ export default function MitraDashboard() {
                     {pendingBookingCount > 0 && <Badge variant="destructive" className="h-5 min-w-5 px-1 justify-center text-[10px]">{pendingBookingCount}</Badge>}
                   </Link>
                   <hr className="my-1 border-border" />
-                  <button onClick={() => { setIsDropdownOpen(false); handleLogout(); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left">
+                  <button onClick={() => { setIsDropdownOpen(false); setIsLogoutDialogOpen(true); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left">
                     <LogOut className="w-4 h-4" /> Keluar
                   </button>
                 </div>
@@ -742,8 +818,8 @@ export default function MitraDashboard() {
                           </div>
                           <p className="text-sm text-muted-foreground truncate">{chat.lastMessage}</p>
                           <div className="flex items-center gap-2 mt-1">
-                            <Badge variant={chat.bookingStatus === "completed" ? "success" : chat.bookingStatus === "cancelled" || chat.bookingStatus === "rejected" ? "destructive" : chat.bookingStatus === "active" ? "default" : chat.bookingStatus === "pending_mitra" ? "warning" : "outline"} className="text-xs">
-                              {chat.bookingStatus === "completed" ? "Selesai" : chat.bookingStatus === "cancelled" ? "Dibatalkan" : chat.bookingStatus === "rejected" ? "Ditolak" : chat.bookingStatus === "pending_mitra" ? "Perlu persetujuan Anda" : chat.bookingStatus === "pending" ? "Menunggu admin" : chat.bookingStatus === "active" ? "Sedang Berlangsung" : "Disetujui"}
+                            <Badge variant={chat.bookingStatus === "completed" ? "success" : chat.bookingStatus === "cancelled" || chat.bookingStatus === "rejected" || chat.bookingStatus === "expired" ? "destructive" : chat.bookingStatus === "active" ? "default" : chat.bookingStatus === "pending_mitra" ? "warning" : "outline"} className="text-xs">
+                              {chat.bookingStatus === "completed" ? "Selesai" : chat.bookingStatus === "expired" ? "Kadaluarsa" : chat.bookingStatus === "cancelled" ? "Dibatalkan" : chat.bookingStatus === "rejected" ? "Ditolak" : chat.bookingStatus === "pending_mitra" ? "Perlu persetujuan Anda" : chat.bookingStatus === "pending" ? "Menunggu admin" : chat.bookingStatus === "active" ? "Sedang Berlangsung" : "Disetujui"}
                             </Badge>
                             {chat.bookingStatus === "active" && (
                               <Badge variant="default" className="text-xs gap-1">
@@ -786,8 +862,8 @@ export default function MitraDashboard() {
                     <div className="flex-1">
                       <h3 className="font-semibold">{selectedChat.userName}</h3>
                       <div className="flex items-center gap-2">
-                        <Badge variant={selectedChat.bookingStatus === "completed" ? "success" : selectedChat.bookingStatus === "cancelled" ? "destructive" : selectedChat.bookingStatus === "active" ? "default" : "outline"} className="text-xs">
-                          {selectedChat.bookingStatus === "completed" ? "Selesai" : selectedChat.bookingStatus === "cancelled" ? "Dibatalkan" : selectedChat.bookingStatus === "active" ? "Sedang Berlangsung" : "Aktif"}
+                        <Badge variant={selectedChat.bookingStatus === "completed" ? "success" : selectedChat.bookingStatus === "cancelled" || selectedChat.bookingStatus === "expired" ? "destructive" : selectedChat.bookingStatus === "active" ? "default" : "outline"} className="text-xs">
+                          {selectedChat.bookingStatus === "completed" ? "Selesai" : selectedChat.bookingStatus === "expired" ? "Kadaluarsa" : selectedChat.bookingStatus === "cancelled" ? "Dibatalkan" : selectedChat.bookingStatus === "active" ? "Sedang Berlangsung" : "Aktif"}
                         </Badge>
                         {selectedChat.bookingStatus === "active" && (
                           <Badge variant="default" className="text-xs gap-1">
@@ -834,6 +910,19 @@ export default function MitraDashboard() {
           </Card>
         </div>
       </div>
+
+      <AlertDialog open={isLogoutDialogOpen} onOpenChange={setIsLogoutDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Keluar dari Dashboard Mitra?</AlertDialogTitle>
+            <AlertDialogDescription>Anda perlu masuk kembali untuk mengakses dashboard Mitra.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction onClick={handleLogout}>Ya, Keluar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

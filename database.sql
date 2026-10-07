@@ -55,6 +55,7 @@ CREATE TABLE bookings (
     time TIME,
     duration INT DEFAULT 1,
     total DECIMAL(10,2) DEFAULT 0,
+    meeting_city VARCHAR(255),
     notes TEXT,
     payment_status VARCHAR(50) DEFAULT 'pending',
     approval_status VARCHAR(50) DEFAULT 'pending_approval',
@@ -87,4 +88,35 @@ CREATE TABLE messages (
     message TEXT,
     status VARCHAR(50) DEFAULT 'sent',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS complaints (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    user_name VARCHAR(255) NOT NULL,
+    user_email VARCHAR(255),
+    user_phone VARCHAR(50),
+    booking_id VARCHAR(36) NOT NULL,
+    talent_id VARCHAR(36),
+    talent_name VARCHAR(255),
+    subject VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    urgency VARCHAR(20) DEFAULT 'normal',
+    status VARCHAR(20) DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_complaints_user_id (user_id),
+    INDEX idx_complaints_booking_id (booking_id),
+    INDEX idx_complaints_status (status)
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT,
+    type VARCHAR(50) DEFAULT 'admin',
+    is_read TINYINT(1) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_notifications_user_id (user_id)
 );

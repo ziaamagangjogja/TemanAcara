@@ -384,6 +384,7 @@ app.patch('/api/talents/:id/price', async (req, res) => {
 // Bookings
 app.get('/api/bookings', async (req, res) => {
   try {
+    await expireOverduePendingBookings();
     const [rows] = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
     // Normalize date fields to clean YYYY-MM-DD strings
     const cleaned = rows.map(row => {
@@ -404,14 +405,74 @@ app.get('/api/bookings', async (req, res) => {
   }
 });
 
+async function expireOverduePendingBookings() {
+  const [overdueBookings] = await pool.query(`
+    SELECT id, user_id, purpose, payment_status
+    FROM bookings
+    WHERE approval_status IN ('pending_approval', 'pending_mitra')
+      AND date IS NOT NULL
+      AND time IS NOT NULL
+      AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW()
+  `);
+
+  for (const booking of overdueBookings) {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [result] = await connection.query(`
+        UPDATE bookings
+        SET approval_status = 'expired',
+            payment_status = CASE WHEN payment_status = 'paid' THEN 'refund_pending' ELSE payment_status END
+        WHERE id = ?
+          AND approval_status IN ('pending_approval', 'pending_mitra')
+          AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW()
+      `, [booking.id]);
+
+      if (result.affectedRows === 0) {
+        await connection.rollback();
+        continue;
+      }
+
+      if (booking.user_id) {
+        const refundMessage = booking.payment_status === 'paid'
+          ? 'Pembayaran Anda tercatat. Pengembalian dana sedang menunggu penanganan Admin.'
+          : 'Pesanan dibatalkan karena waktu jadwal sudah lewat sebelum mendapat persetujuan.';
+        await connection.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'booking', 0, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), booking.user_id, 'Pesanan Kedaluwarsa', refundMessage]
+        );
+      }
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      console.error(`Gagal mengakhiri booking tertunda ${booking.id}:`, error.message);
+    } finally {
+      connection.release();
+    }
+  }
+}
+
+function startPendingBookingExpiryWorker() {
+  void expireOverduePendingBookings().catch(error => {
+    console.error('Gagal memeriksa booking kedaluwarsa:', error.message);
+  });
+  setInterval(() => {
+    void expireOverduePendingBookings().catch(error => {
+      console.error('Gagal memeriksa booking kedaluwarsa:', error.message);
+    });
+  }, 60 * 1000);
+}
+
 app.post('/api/bookings', async (req, res) => {
   try {
-    const { id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, payment_status, approval_status, payment_code, created_at, notes } = req.body;
+    const { id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, meeting_city, payment_status, approval_status, payment_code, created_at, notes } = req.body;
     const bookingId = id || crypto.randomUUID();
     await pool.query(
-      `INSERT INTO bookings (id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, payment_status, approval_status, payment_code, created_at, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [bookingId, user_id, user_name, talent_id, purpose, type, date, time, duration, total, payment_status, approval_status, payment_code, created_at || new Date(), notes || ""]
+      `INSERT INTO bookings (id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, meeting_city, payment_status, approval_status, payment_code, created_at, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [bookingId, user_id, user_name, talent_id, purpose, type, date, time, duration, total, meeting_city || "", payment_status, approval_status, payment_code, created_at || new Date(), notes || ""]
     );
     const [rows] = await pool.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
     res.status(201).json(rows[0]);
@@ -425,7 +486,7 @@ app.put('/api/bookings/:id', async (req, res) => {
     const allowedFields = [
       'payment_method', 'payment_code', 'payment_proof', 'transfer_amount',
       'transfer_time', 'payment_status', 'approval_status', 'rating',
-      'rating_comment', 'notes'
+      'rating_comment', 'meeting_city', 'notes'
     ];
     const updateFields = [];
     const updateValues = [];
@@ -438,11 +499,23 @@ app.put('/api/bookings/:id', async (req, res) => {
     }
     
     if (updateFields.length > 0) {
+      const completingBooking = req.body.approval_status === 'completed';
       updateValues.push(req.params.id);
-      await pool.query(`UPDATE bookings SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+      const whereClause = completingBooking
+        ? ' WHERE id = ? AND approval_status = ?'
+        : ' WHERE id = ?';
+      if (completingBooking) updateValues.push('approved');
+      const [result] = await pool.query(
+        `UPDATE bookings SET ${updateFields.join(', ')}${whereClause}`,
+        updateValues
+      );
+      return res.status(200).json({
+        message: 'Booking updated',
+        changed: !completingBooking || result.affectedRows > 0,
+      });
     }
     
-    res.status(200).json({ message: 'Booking updated' });
+    res.status(200).json({ message: 'Booking updated', changed: false });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -494,20 +567,421 @@ app.post('/api/chats', async (req, res) => {
 });
 
 app.post('/api/messages', async (req, res) => {
+  let connection;
+  let autoResponseLock;
   try {
-    const { id, chat_id, sender_id, sender_type, message, status, created_at } = req.body;
-    await pool.query(
+    const { id, chat_id, sender_id, sender_type, message, status, created_at, is_auto_response } = req.body;
+    const isBookingWelcome = is_auto_response === true &&
+      sender_type === 'talent' &&
+      String(message || '').startsWith('Halo! Terima kasih sudah booking untuk ');
+
+    if (isBookingWelcome) {
+      connection = await pool.getConnection();
+      autoResponseLock = `welcome:${chat_id}`;
+      const [locks] = await connection.query('SELECT GET_LOCK(?, 10) AS acquired', [autoResponseLock]);
+      if (locks[0]?.acquired !== 1) {
+        return res.status(503).json({ message: 'Greeting chat sedang diproses. Silakan coba lagi.' });
+      }
+
+      const [existing] = await connection.query(
+        `SELECT id FROM messages
+         WHERE chat_id = ? AND sender_id = ? AND sender_type = 'talent' AND message = ?
+         LIMIT 1`,
+        [chat_id, sender_id, message]
+      );
+      if (existing.length > 0) {
+        return res.status(200).json({ message: 'Greeting sudah ada.', duplicate: true });
+      }
+    }
+
+    const query = isBookingWelcome ? connection.query.bind(connection) : pool.query.bind(pool);
+    await query(
       `INSERT INTO messages (id, chat_id, sender_id, sender_type, message, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [id, chat_id, sender_id, sender_type, message, status, created_at]
     );
     res.status(201).json({ message: 'Message created' });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  } finally {
+    if (connection) {
+      if (autoResponseLock) {
+        await connection.query('SELECT RELEASE_LOCK(?)', [autoResponseLock]).catch(() => {});
+      }
+      connection.release();
+    }
   }
 });
 
+async function removeDuplicateBookingWelcomeMessages() {
+  const [result] = await pool.query(`
+    DELETE duplicate_message
+    FROM messages AS duplicate_message
+    INNER JOIN messages AS kept_message
+      ON kept_message.chat_id = duplicate_message.chat_id
+      AND kept_message.sender_id = duplicate_message.sender_id
+      AND kept_message.sender_type = 'talent'
+      AND duplicate_message.sender_type = 'talent'
+      AND kept_message.message = duplicate_message.message
+      AND kept_message.message LIKE 'Halo! Terima kasih sudah booking untuk %'
+      AND (
+        kept_message.created_at < duplicate_message.created_at OR
+        (kept_message.created_at = duplicate_message.created_at AND kept_message.id < duplicate_message.id)
+      )
+    WHERE duplicate_message.message LIKE 'Halo! Terima kasih sudah booking untuk %'
+  `);
+  if (result.affectedRows > 0) {
+    console.log(`Removed ${result.affectedRows} duplicate booking welcome messages`);
+  }
+}
+
+// Customer complaints
+app.get('/api/complaints', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM complaints ORDER BY created_at DESC');
+    res.status(200).json(rows.map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      userName: row.user_name,
+      userEmail: row.user_email,
+      userPhone: row.user_phone,
+      bookingId: row.booking_id,
+      talentId: row.talent_id,
+      talentName: row.talent_name,
+      subject: row.subject,
+      description: row.description,
+      urgency: row.urgency,
+      status: row.status,
+      source: 'user',
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })));
+  } catch (error) {
+    res.status(500).json({ message: 'Gagal mengambil komplain.', error: error.message });
+  }
+});
+
+app.post('/api/complaints', async (req, res) => {
+  try {
+    const { userId, bookingId, description, urgency = 'normal' } = req.body || {};
+    if (!userId || !bookingId || !String(description || '').trim()) {
+      return res.status(400).json({ message: 'Pelanggan, pesanan, dan deskripsi komplain wajib diisi.' });
+    }
+    if (String(description).trim().length > 10000) {
+      return res.status(400).json({ message: 'Deskripsi komplain maksimal 10.000 karakter.' });
+    }
+
+    const [bookings] = await pool.query(
+      'SELECT id, user_id, talent_id FROM bookings WHERE id = ?',
+      [bookingId]
+    );
+    if (bookings.length === 0) return res.status(404).json({ message: 'Pesanan tidak ditemukan.' });
+    if (String(bookings[0].user_id) !== String(userId)) {
+      return res.status(403).json({ message: 'Pesanan ini bukan milik akun Anda.' });
+    }
+
+    const [users] = await pool.query('SELECT name, email, phone FROM users WHERE id = ?', [userId]);
+    const [talents] = bookings[0].talent_id
+      ? await pool.query('SELECT full_name FROM profiles WHERE user_id = ?', [bookings[0].talent_id])
+      : [[]];
+    const userName = users[0]?.name || 'Pelanggan';
+    const talentName = talents[0]?.full_name || req.body.talentName || 'Mitra';
+    const id = crypto.randomUUID();
+    const subject = `Komplain pesanan dengan ${talentName}`;
+    const safeUrgency = ['low', 'normal', 'high', 'critical'].includes(urgency) ? urgency : 'normal';
+
+    await pool.query(
+      `INSERT INTO complaints
+        (id, user_id, user_name, user_email, user_phone, booking_id, talent_id, talent_name, subject, description, urgency, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [id, userId, userName, users[0]?.email || '', users[0]?.phone || '', bookingId, bookings[0].talent_id, talentName, subject, String(description).trim(), safeUrgency]
+    );
+
+    const [created] = await pool.query('SELECT * FROM complaints WHERE id = ?', [id]);
+    const row = created[0];
+    res.status(201).json({
+      report: {
+        id: row.id,
+        userId: row.user_id,
+        userName: row.user_name,
+        userEmail: row.user_email,
+        userPhone: row.user_phone,
+        bookingId: row.booking_id,
+        talentId: row.talent_id,
+        talentName: row.talent_name,
+        subject: row.subject,
+        description: row.description,
+        urgency: row.urgency,
+        status: row.status,
+        source: 'user',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Komplain gagal disimpan.', error: error.message });
+  }
+});
+
+app.put('/api/complaints/:id', async (req, res) => {
+  try {
+    const allowedStatuses = ['pending', 'in-progress', 'resolved'];
+    const { status } = req.body || {};
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: 'Status komplain tidak valid.' });
+    }
+
+    const [result] = await pool.query(
+      'UPDATE complaints SET status = ? WHERE id = ?',
+      [status, req.params.id]
+    );
+    if (result.affectedRows === 0) {
+      const [rows] = await pool.query('SELECT id FROM complaints WHERE id = ?', [req.params.id]);
+      if (rows.length === 0) return res.status(404).json({ message: 'Komplain tidak ditemukan.' });
+    }
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Status komplain gagal diperbarui.', error: error.message });
+  }
+});
+
+// =================================================================
+// TOPUP REQUESTS
+// =================================================================
+app.get('/api/topup-requests', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT topups.*, users.photo AS user_photo
+       FROM topup_requests AS topups
+       LEFT JOIN users ON users.id = topups.user_id
+       ORDER BY topups.created_at DESC`
+    );
+    const formatted = rows.map(r => ({
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      userEmail: r.user_email,
+      userPhoto: r.user_photo || "",
+      amount: Number(r.amount),
+      proofImageBase64: r.proof_image,
+      status: r.status,
+      adminNote: r.admin_note,
+      createdAt: r.created_at,
+      processedAt: r.processed_at
+    }));
+    res.status(200).json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/topup-requests', async (req, res) => {
+  try {
+    const { id, userId, userName, userEmail, amount, proofImageBase64, status, createdAt } = req.body;
+    await pool.query(
+      `INSERT INTO topup_requests (id, user_id, user_name, user_email, amount, proof_image, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, userId, userName, userEmail, amount, proofImageBase64, status, createdAt]
+    );
+    res.status(201).json(req.body);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/topup-requests/:id/approve', async (req, res) => {
+  try {
+    const { adminNote } = req.body;
+    
+    // 1. Get the topup request to find user_id and amount
+    const [rows] = await pool.query('SELECT * FROM topup_requests WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Request not found' });
+    const topup = rows[0];
+    
+    // 2. Update topup status
+    await pool.query(
+      `UPDATE topup_requests SET status = 'approved', admin_note = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [adminNote || null, req.params.id]
+    );
+    
+    // 3. Add wallet to user in DB
+    await pool.query(
+      `UPDATE users SET wallet = wallet + ? WHERE id = ?`,
+      [topup.amount, topup.user_id]
+    );
+    
+    // 4. Store notification for user
+    const notifId = crypto.randomUUID();
+    const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+    await pool.query(
+      `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+      [notifId, topup.user_id, 'Saldo Berhasil Ditambahkan! 💰', `Permintaan isi saldo sebesar ${fmt(topup.amount)} telah disetujui oleh Admin. Saldo kamu sudah diperbarui!`, 'payment']
+    );
+    
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/topup-requests/:id/reject', async (req, res) => {
+  try {
+    const { adminNote } = req.body;
+    const [rows] = await pool.query('SELECT * FROM topup_requests WHERE id = ?', [req.params.id]);
+    if (rows.length > 0) {
+      const topup = rows[0];
+      const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+      const notifId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+        [notifId, topup.user_id, 'Permintaan Isi Saldo Ditolak', `Permintaan isi saldo sebesar ${fmt(topup.amount)} ditolak. Alasan: ${adminNote || 'Bukti tidak valid'}.`, 'admin']
+      );
+    }
+    await pool.query(
+      `UPDATE topup_requests SET status = 'rejected', admin_note = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [adminNote || null, req.params.id]
+    );
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =================================================================
+// NOTIFICATIONS API
+// =================================================================
+app.get('/api/notifications/:userId', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50',
+      [req.params.userId]
+    );
+    const formatted = rows.map(r => ({
+      id: r.id,
+      title: r.title,
+      message: r.message,
+      time: new Date(r.created_at).toLocaleString('id-ID'),
+      read: r.is_read === 1,
+      type: r.type
+    }));
+    res.status(200).json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/notifications', async (req, res) => {
+  try {
+    const { id, userId, title, message, type } = req.body;
+    const notifId = id || crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+      [notifId, userId, title, message, type || 'admin']
+    );
+    res.status(201).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/notifications/:userId/:notificationId/read', async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE notifications SET is_read = 1 WHERE user_id = ? AND id = ?',
+      [req.params.userId, req.params.notificationId]
+    );
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/notifications/:userId/read-all', async (req, res) => {
+  try {
+    await pool.query('UPDATE notifications SET is_read = 1 WHERE user_id = ?', [req.params.userId]);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pastikan tabel top-up tersedia sebelum endpoint dipakai. Sebelumnya, ketika
+// tabel belum pernah dibuat, POST dari user gagal lalu diam-diam tersimpan di
+// localStorage browser user saja sehingga tidak pernah terlihat di browser admin.
+async function ensureTopUpTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS topup_requests (
+      id VARCHAR(100) PRIMARY KEY,
+      user_id VARCHAR(36),
+      user_name VARCHAR(255),
+      user_email VARCHAR(255),
+      amount DECIMAL(10,2),
+      proof_image LONGTEXT,
+      status VARCHAR(50) DEFAULT 'pending',
+      admin_note TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      processed_at TIMESTAMP NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS complaints (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      user_name VARCHAR(255) NOT NULL,
+      user_email VARCHAR(255),
+      user_phone VARCHAR(50),
+      booking_id VARCHAR(36) NOT NULL,
+      talent_id VARCHAR(36),
+      talent_name VARCHAR(255),
+      subject VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL,
+      urgency VARCHAR(20) DEFAULT 'normal',
+      status VARCHAR(20) DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_complaints_user_id (user_id),
+      INDEX idx_complaints_booking_id (booking_id),
+      INDEX idx_complaints_status (status)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      message TEXT,
+      type VARCHAR(50) DEFAULT 'admin',
+      is_read TINYINT(1) DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_notifications_user_id (user_id)
+    )
+  `);
+
+  await removeDuplicateBookingWelcomeMessages();
+
+  // Database lama mungkin belum memiliki kolom lokasi pertemuan.
+  try {
+    await pool.query('ALTER TABLE bookings ADD COLUMN meeting_city VARCHAR(255) NULL');
+  } catch (error) {
+    // Error duplicate column berarti kolom sudah tersedia, aman diabaikan.
+    if (!String(error.message || '').toLowerCase().includes('duplicate')) throw error;
+  }
+}
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+ensureTopUpTable()
+  .then(() => {
+    startPendingBookingExpiryWorker();
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Gagal menyiapkan tabel aplikasi:', error.message);
+    // Tetap jalankan server agar fitur lain tidak ikut mati; endpoint akan
+    // mengembalikan error yang jelas jika koneksi database belum tersedia.
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT} (sebagian tabel belum siap)`);
+    });
+  });

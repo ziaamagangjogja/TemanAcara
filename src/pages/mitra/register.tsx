@@ -1,5 +1,5 @@
 // src/pages/MitraRegister.tsx
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2 } from "lucide-react";
@@ -11,7 +11,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { registerMitra } from "@/lib/mitraStore";
+import { getCurrentUser } from "@/lib/userStore";
 import { talents } from "@/data/mockData";
+
+const categories = [
+  "Travelling", "Nonton Film", "Kuliner", "Fotografi", "Gaming",
+  "Musik", "Videografer", "Olahraga", "Membaca", "Seni",
+  "Memasak", "Hiking", "Yoga", "Renang", "Basket",
+  "Badminton", "Sepak Bola", "Karaoke", "Belanja", "Kopi",
+  "Podcast", "Lainnya"
+];
 
 export default function MitraRegister() {
   const navigate = useNavigate();
@@ -22,6 +31,7 @@ export default function MitraRegister() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [hasUserProfile, setHasUserProfile] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
 
@@ -37,14 +47,39 @@ export default function MitraRegister() {
     age: "", // Tambahkan field umur
   });
 
-  // Daftar kategori yang tersedia
-  const categories = [
-    "Travelling", "Nonton Film", "Kuliner", "Fotografi", "Gaming",
-    "Musik", "Videografer", "Olahraga", "Membaca", "Seni",
-    "Memasak", "Hiking", "Yoga", "Renang", "Basket",
-    "Badminton", "Sepak Bola", "Karaoke", "Belanja", "Kopi",
-    "Podcast", "Lainnya"
-  ];
+  useEffect(() => {
+    let isActive = true;
+
+    const fillFromUserProfile = async () => {
+      const user = await getCurrentUser();
+      if (!isActive || !user) return;
+
+      setHasUserProfile(true);
+      setFormData(current => ({
+        ...current,
+        name: current.name || user.name,
+        email: current.email || user.email,
+        phone: current.phone || user.phone,
+        address: current.address || user.city,
+        description: current.description || user.bio,
+      }));
+      setProfileImagePreview(current => current || user.photo || null);
+
+      const profileHobbies = user.hobbies
+        .split(/[,;\n]/)
+        .map(hobby => hobby.trim().toLocaleLowerCase())
+        .filter(Boolean);
+      const matchingCategories = categories.filter(category =>
+        profileHobbies.includes(category.toLocaleLowerCase())
+      );
+      setSelectedCategories(current => current.length ? current : matchingCategories);
+    };
+
+    void fillFromUserProfile();
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   // Fungsi untuk menangani perubahan input
   const handleInputChange = (field: string, value: string) => {
@@ -246,11 +281,17 @@ export default function MitraRegister() {
           <div className="w-16 h-16 bg-gradient-hero rounded-2xl flex items-center justify-center mx-auto mb-4">
             <UserPlus className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold">Daftar Talent Baru</h1>
+          <h1 className="text-2xl font-bold">Daftar Menjadi Mitra</h1>
           <p className="text-muted-foreground text-sm mt-2">
-            Hanya untuk talent yang belum terdaftar
+            Lengkapi data yang belum tersedia untuk mengajukan profil mitra.
           </p>
         </div>
+
+        {hasUserProfile && (
+          <div className="mb-6 rounded-md border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
+            Data profil akunmu sudah diisi otomatis. Periksa kembali dan lengkapi bagian yang masih kosong.
+          </div>
+        )}
 
         <form onSubmit={handleRegister} className="space-y-6">
           {/* Informasi Pribadi Section */}

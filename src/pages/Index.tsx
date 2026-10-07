@@ -7,9 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { testimonials, talents as mockTalents } from "@/data/mockData";
 import { TalentCard } from "@/components/TalentCard";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
+import { getCurrentUserOrMitra } from "@/lib/bookingStore";
 
 export default function Index() {
   const [displayTalents, setDisplayTalents] = useState<any[]>(mockTalents);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   const [stats, setStats] = useState([
     { value: "...", label: "Pengguna Aktif" },
@@ -19,6 +21,9 @@ export default function Index() {
   ]);
 
   useEffect(() => {
+    const user = getCurrentUserOrMitra();
+    setIsLoggedIn(!!user);
+
     getAllVerifiedTalents().then(data => {
       if (Array.isArray(data) && data.length > 0) {
         setDisplayTalents(data);
@@ -92,11 +97,13 @@ export default function Index() {
                     <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </Button>
                 </Link>
-                <Link to="/login">
-                  <Button variant="outline" size="xl">
-                    Masuk / Daftar
-                  </Button>
-                </Link>
+                {!isLoggedIn && (
+                  <Link to="/login">
+                    <Button variant="outline" size="xl">
+                      Masuk / Daftar
+                    </Button>
+                  </Link>
+                )}
               </div>
 
               {/* Stats */}
@@ -240,11 +247,13 @@ export default function Index() {
                     Pilih Teman Sekarang
                   </Button>
                 </Link>
-                <Link to="/login">
-                  <Button variant="outline" size="lg" className="border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-primary">
-                    Masuk Sekarang
-                  </Button>
-                </Link>
+                {!isLoggedIn && (
+                  <Link to="/login">
+                    <Button variant="outline" size="lg" className="border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-primary">
+                      Masuk Sekarang
+                    </Button>
+                  </Link>
+                )}
               </div>
             </div>
           </Card>

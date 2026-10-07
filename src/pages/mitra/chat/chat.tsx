@@ -79,7 +79,8 @@ export default function MitraChatPage() {
             return;
           }
         const durationHours = Number(activeChat.duration) || 1;
-        const endTimestamp = startTimestamp + durationHours * 60 * 60 * 1000;
+        // Padding 1 jam ekstra untuk chat
+        const endTimestamp = startTimestamp + (durationHours + 1) * 60 * 60 * 1000;
         
         const now = new Date().getTime();
         const difference = endTimestamp - now;

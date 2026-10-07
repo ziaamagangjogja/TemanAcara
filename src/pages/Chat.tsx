@@ -17,6 +17,7 @@ import {
   ChatMessage,
   ChatSession,
   fetchChatsFromSupabase,
+  isChatSessionActive,
 } from '@/lib/chatStore';
 import { refreshBookingsFromSupabase } from '@/lib/bookingStore';
 
@@ -147,7 +148,18 @@ export default function UserChat() {
             ))}
             {isTalentTyping && (<div className="flex justify-start"><div className="max-w-[70%] p-3 rounded-lg bg-gray-200"><div className="flex space-x-1"><div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div><div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div><div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div></div></div></div>)}
           </CardContent>
-          <div className="p-4 border-t"><div className="flex gap-2"><Input value={newMessage} onChange={handleInputChange} placeholder="Ketik pesan..." onKeyPress={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }} className="flex-1" disabled={isSending} /><Button onClick={handleSendMessage} disabled={!newMessage.trim() || isSending}>{isSending ? <Loader2 className="animate-spin w-4 h-4" /> : <Send className="w-4 h-4" />}</Button></div></div>
+          <div className="p-4 border-t">
+            {isChatSessionActive(session) ? (
+              <div className="flex gap-2">
+                <Input value={newMessage} onChange={handleInputChange} placeholder="Ketik pesan..." onKeyPress={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }} className="flex-1" disabled={isSending} />
+                <Button onClick={handleSendMessage} disabled={!newMessage.trim() || isSending}>{isSending ? <Loader2 className="animate-spin w-4 h-4" /> : <Send className="w-4 h-4" />}</Button>
+              </div>
+            ) : (
+              <div className="text-center text-sm text-muted-foreground p-2 bg-gray-100 rounded-md">
+                Sesi pesan ini telah berakhir (hanya aktif hingga 1 jam setelah waktu booking).
+              </div>
+            )}
+          </div>
         </Card>
       </div>
     </div>

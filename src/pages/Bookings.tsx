@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Calendar, Clock, MapPin, MessageCircle, Star, ChevronRight, Lock, CheckCircle, Trash2 } from "lucide-react";
+import { Calendar, Clock, MapPin, MessageCircle, Star, ChevronRight, Lock, CheckCircle, Trash2, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { talents } from "@/data/mockData";
-import { getBookings, refreshBookingsFromSupabase, SharedBooking, deleteBooking } from "@/lib/bookingStore";
+import { getBookings, refreshBookingsFromSupabase, SharedBooking, deleteBooking, isBookingOngoing } from "@/lib/bookingStore";
 import { getCurrentUser } from "@/lib/userStore";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import {
@@ -20,13 +20,21 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
-type BookingStatus = "pending_payment" | "pending_approval" | "approved" | "completed" | "cancelled";
+type BookingStatus = "pending_payment" | "pending_approval" | "approved" | "completed" | "cancelled" | "ongoing" | "expired";
 
 export default function Bookings() {
   const [bookings, setBookings] = useState<SharedBooking[]>([]);
   const [allTalents, setAllTalents] = useState<any[]>(talents);
   const [isLoading, setIsLoading] = useState(true);
+  const [ongoingBookings, setOngoingBookings] = useState<SharedBooking[]>([]);
 
   useEffect(() => {
     const fetchBookings = async () => {
@@ -41,6 +49,7 @@ export default function Bookings() {
       if (currentUser) {
         const userBookings = allBookings.filter(b => b.userId === currentUser.id);
         setBookings(userBookings);
+        setOngoingBookings(userBookings.filter(b => isBookingOngoing(b)));
       } else {
         setBookings([]);
       }
@@ -58,12 +67,14 @@ export default function Bookings() {
     }).format(price);
   };
 
-  const getBookingStatus = (booking: SharedBooking): BookingStatus | "pending_mitra" => {
+  const getBookingStatus = (booking: SharedBooking): BookingStatus => {
+    if (isBookingOngoing(booking)) return "ongoing";
     if (booking.approvalStatus === "completed") return "completed";
     if (booking.approvalStatus === "rejected") return "cancelled";
+    if (booking.approvalStatus === "expired") return "expired";
 
-    // Pengecekan tanggal/jam: jika tanggal booking sudah lewat dari sekarang, otomatis "completed"
-    if (booking.date) {
+    // Approved bookings finish automatically; pending bookings expire on the server.
+    if (booking.date && booking.approvalStatus === "approved") {
       const now = new Date();
       const timeStr = booking.time ? (booking.time.length === 5 ? `${booking.time}:00` : booking.time) : "00:00:00";
       const startTime = new Date(`${booking.date}T${timeStr}`);
@@ -85,6 +96,8 @@ export default function Bookings() {
 
   const getStatusBadge = (status: BookingStatus | "pending_mitra") => {
     switch (status) {
+      case "ongoing":
+        return <Badge variant="success" className="animate-pulse">🔴 Sedang Berjalan</Badge>;
       case "pending_payment":
         return <Badge variant="warning">Menunggu Pembayaran</Badge>;
       case "pending_approval":
@@ -97,6 +110,8 @@ export default function Bookings() {
         return <Badge variant="secondary">Selesai</Badge>;
       case "cancelled":
         return <Badge variant="destructive">Dibatalkan</Badge>;
+      case "expired":
+        return <Badge variant="destructive">Kadaluarsa</Badge>;
       default:
         return null;
     }
@@ -111,12 +126,12 @@ export default function Bookings() {
 
   const activeBookings = bookings.filter((b) => {
     const status = getBookingStatus(b);
-    return status === "approved" || status === "pending_approval" || status === "pending_mitra" || status === "pending_payment";
+    return status === "ongoing" || status === "approved" || status === "pending_approval" || (status as string) === "pending_mitra" || status === "pending_payment";
   });
 
   const completedBookings = bookings.filter((b) => {
     const status = getBookingStatus(b);
-    return status === "completed" || status === "cancelled";
+    return status === "completed" || status === "cancelled" || status === "expired";
   });
 
   const BookingCard = ({ booking }: { booking: SharedBooking }) => {
@@ -231,12 +246,61 @@ export default function Bookings() {
                     </AlertDialogContent>
                   </AlertDialog>
                 )}
-                <Link to={`/talent/${booking.talentId}`}>
-                  <Button size="sm" variant="ghost" className="gap-1">
-                    Detail
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </Link>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button size="sm" variant="ghost" className="gap-1">
+                      Detail
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                      <DialogTitle>Detail Pemesanan</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                      <div className="flex items-center gap-4">
+                        <img
+                          src={talentPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(talentName)}`}
+                          alt={talentName}
+                          className="w-16 h-16 rounded-full object-cover"
+                        />
+                        <div>
+                          <h4 className="font-bold">{talentName}</h4>
+                          <p className="text-sm text-muted-foreground">{booking.type === 'online' ? 'Online (Video Call)' : 'Offline (Bertemu Langsung)'}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-3 text-sm mt-4">
+                        <div className="flex justify-between items-center border-b pb-2">
+                          <span className="text-muted-foreground">Status</span>
+                          <span>{getStatusBadge(bookingStatus)}</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-2">
+                          <span className="text-muted-foreground">Tujuan</span>
+                          <span className="font-medium text-right">{booking.purpose}</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-2">
+                          <span className="text-muted-foreground">Tanggal</span>
+                          <span className="font-medium text-right">{booking.date ? new Date(booking.date).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "-"}</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-2">
+                          <span className="text-muted-foreground">Waktu</span>
+                          <span className="font-medium">{booking.time || "-"} ({booking.duration || 0} jam)</span>
+                        </div>
+                        <div className="flex justify-between border-b pb-2">
+                          <span className="text-muted-foreground">Total Biaya</span>
+                          <span className="font-bold text-primary">{formatPrice(booking.total || 0)}</span>
+                        </div>
+                        {booking.notes && (
+                          <div className="pt-2 border-b pb-2">
+                            <span className="text-muted-foreground block mb-2">Catatan Tambahan:</span>
+                            <div className="bg-muted p-3 rounded-md text-sm">{booking.notes}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
               </div>
             </div>
           </div>
@@ -257,6 +321,38 @@ export default function Bookings() {
     <div className="min-h-screen bg-gradient-warm pt-20 md:pt-24 pb-24 md:pb-8">
       <div className="container max-w-3xl">
         <h1 className="text-3xl font-bold mb-6">Pesanan Saya</h1>
+
+        {/* Banner: Pesanan Sedang Berjalan */}
+        {ongoingBookings.length > 0 && (
+          <div className="mb-6 space-y-3">
+            {ongoingBookings.map(b => {
+              const tn = allTalents.find(t => t.id === b.talentId || t.talentId === b.talentId);
+              const talentName = tn?.name || b.talentName || "Teman";
+              const startTime = new Date(`${b.date}T${String(b.time).slice(0,5)}`);
+              const endTime = new Date(startTime);
+              endTime.setHours(endTime.getHours() + b.duration);
+              const fmtTime = (d: Date) => d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+              return (
+                <div key={b.id} className="flex items-center gap-4 p-4 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 animate-pulse-once">
+                  <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+                    <Activity className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-semibold text-green-800 dark:text-green-200">🔴 Pesanan Sedang Berjalan!</p>
+                    <p className="text-sm text-green-700 dark:text-green-300">
+                      Kamu sedang bersama <strong>{talentName}</strong> untuk <strong>{b.purpose}</strong> — {fmtTime(startTime)} s/d {fmtTime(endTime)}
+                    </p>
+                  </div>
+                  {b.id && (
+                    <a href={`/chat/${b.id}`} className="text-xs font-semibold text-green-700 dark:text-green-300 underline hover:opacity-80 whitespace-nowrap">
+                      Buka Chat →
+                    </a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <Card className="p-4 mb-6 bg-accent/30 border-primary/20">
           <div className="flex items-start gap-3">

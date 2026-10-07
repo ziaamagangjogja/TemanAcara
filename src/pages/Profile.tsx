@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   User,
   Edit3,
@@ -21,6 +21,7 @@ import {
   Eye,
   RefreshCw,
   HeartHandshake,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,19 +37,24 @@ import { useToast } from "@/hooks/use-toast";
 import {
   getCurrentUser,
   updateCurrentUser,
+  NotificationItem,
   UserProfile,
+  markNotificationRead,
   markAllNotificationsRead
 } from "@/lib/userStore";
 import { getBookings, refreshBookingsFromSupabase, updateBookingRating } from "@/lib/bookingStore";
 import { dicebearAvatar, initialsAvatar } from "@/lib/utils";
 import { compressImageFile } from "@/utils/imageCompressor";
+import { createTopUpRequest, getUserTopUpRequests, TopUpRequest } from "@/lib/topupStore";
 
-const TOP_UP_OPTIONS = [50000, 100000, 250000];
+const TOP_UP_OPTIONS = [50000, 100000, 200000, 500000, 1000000];
 
 export default function Profile() {
   const { toast } = useToast();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("bookings");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState(requestedTab === "notifications" ? "notifications" : "bookings");
   const [isEditing, setIsEditing] = useState(false);
 
   const [userData, setUserData] = useState<UserProfile | null>(null);
@@ -58,10 +64,20 @@ export default function Profile() {
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
+  // Multi-step top-up state
+  const [topUpStep, setTopUpStep] = useState<1 | 2 | 3>(1);
   const [topUpAmount, setTopUpAmount] = useState<number | null>(null);
+  const [topUpCustomAmount, setTopUpCustomAmount] = useState("");
+  const [topUpProofFile, setTopUpProofFile] = useState<File | null>(null);
+  const [topUpProofPreview, setTopUpProofPreview] = useState<string | null>(null);
+  const [isSubmittingTopUp, setIsSubmittingTopUp] = useState(false);
+  const [myTopUpRequests, setMyTopUpRequests] = useState<TopUpRequest[]>([]);
 
   const [showTransactionDialog, setShowTransactionDialog] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
+  const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
+  const [isMarkingAllNotificationsRead, setIsMarkingAllNotificationsRead] = useState(false);
 
   const [bookings, setBookings] = useState<any[]>([]);
   const [isLoadingBookings, setIsLoadingBookings] = useState(true);
@@ -90,7 +106,19 @@ export default function Profile() {
   const [ratedBookings, setRatedBookings] = useState<string[]>([]);
   const [ratedDetails, setRatedDetails] = useState<Record<string, { rating: number; comment: string; talentId: string }>>({});
 
+  const [complaintModal, setComplaintModal] = useState<{
+    isOpen: boolean;
+    bookingId: string;
+    talentName: string;
+  }>({ isOpen: false, bookingId: "", talentName: "" });
+  const [complaintText, setComplaintText] = useState("");
+  const [isSubmittingComplaint, setIsSubmittingComplaint] = useState(false);
+
   const notifications = useMemo(() => userData?.notifications || [], [userData?.notifications]);
+
+  useEffect(() => {
+    if (requestedTab === "notifications") setActiveTab("notifications");
+  }, [requestedTab]);
 
   const loadUserData = useCallback(async () => {
     try {
@@ -171,6 +199,14 @@ export default function Profile() {
         setRatedBookings(ids);
       }
     } catch {}
+
+    // Muat riwayat top-up milik user
+    loadUserData().then(async () => {
+      const user = await import("@/lib/userStore").then(m => m.getCurrentUser());
+      if (user) {
+        getUserTopUpRequests(user.id).then(reqs => setMyTopUpRequests(reqs));
+      }
+    });
   }, [loadUserData, loadUserBookings, refreshTrigger]);
 
   useEffect(() => {
@@ -189,18 +225,116 @@ export default function Profile() {
     };
   }, [loadUserBookings]);
 
+  // Re-load top-up requests when list changes (e.g. after admin approves)
   useEffect(() => {
-    async function checkNotifications() {
-      if (activeTab === "notifications" && notifications.some((n) => !n.read)) {
-        const updated = await markAllNotificationsRead();
-        if (updated) {
-          setUserData(updated);
-          setEditData(updated);
-        }
+    const handleTopUpUpdate = async () => {
+      const user = await import("@/lib/userStore").then(m => m.getCurrentUser());
+      if (user) {
+        getUserTopUpRequests(user.id).then(reqs => setMyTopUpRequests(reqs));
+        // Reload user data to reflect wallet changes
+        loadUserData();
       }
+    };
+    window.addEventListener("topupRequestsUpdated", handleTopUpUpdate);
+    window.addEventListener("userUpdated", handleTopUpUpdate);
+    
+    // Listen for notification updates
+    const handleNotificationsUpdate = () => {
+      loadUserData();
+    };
+    window.addEventListener("notificationsUpdated", handleNotificationsUpdate);
+    
+    // Cross-tab sync for localStorage
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === "rentmate_topup_requests" || e.key?.startsWith("rentmate_notifications_") || e.key === "rentmate_current_username") {
+        handleTopUpUpdate();
+        loadUserData();
+      }
+    };
+    window.addEventListener("storage", handleStorageEvent);
+
+    return () => {
+      window.removeEventListener("topupRequestsUpdated", handleTopUpUpdate);
+      window.removeEventListener("userUpdated", handleTopUpUpdate);
+      window.removeEventListener("notificationsUpdated", handleNotificationsUpdate);
+      window.removeEventListener("storage", handleStorageEvent);
+    };
+  }, [loadUserData]);
+
+  const handleTopUpProofUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ title: "File terlalu besar", description: "Maksimal 5MB", variant: "destructive" });
+      return;
     }
-    checkNotifications();
-  }, [activeTab, notifications]);
+    try {
+      const compressed = await compressImageFile(file, 800, 800, 0.8);
+      setTopUpProofFile(file);
+      setTopUpProofPreview(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onloadend = () => setTopUpProofPreview(reader.result as string);
+      reader.readAsDataURL(file);
+      setTopUpProofFile(file);
+    }
+  };
+
+  const handleSubmitTopUp = async () => {
+    if (!topUpAmount || !topUpProofPreview || !userData) return;
+    setIsSubmittingTopUp(true);
+    try {
+      const result = await createTopUpRequest(
+        userData.id,
+        userData.name,
+        userData.email,
+        topUpAmount,
+        topUpProofPreview,
+        userData.photo
+      );
+      if (result) {
+        setMyTopUpRequests(prev => [result, ...prev]);
+        setTopUpStep(3);
+        
+        // Save notification to DB
+        const fmt = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n);
+        fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: userData.id,
+            title: "Permintaan Isi Saldo Terkirim",
+            message: `Permintaan isi saldo sebesar ${fmt(topUpAmount)} telah terkirim dan sedang menunggu persetujuan Admin.`,
+            type: "payment"
+          })
+        }).catch(() => {
+          // Fallback: localStorage
+          const key = `rentmate_notifications_${userData.id}`;
+          const existing = JSON.parse(localStorage.getItem(key) || "[]");
+          existing.unshift({ id: Date.now(), title: "Permintaan Isi Saldo Terkirim", message: `Permintaan isi saldo sebesar ${fmt(topUpAmount)} telah terkirim dan sedang menunggu persetujuan Admin.`, time: new Date().toLocaleString("id-ID"), read: false, type: "payment" });
+          localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
+        });
+        window.dispatchEvent(new CustomEvent("notificationsUpdated"));
+        
+
+      } else {
+        throw new Error("Gagal membuat permintaan");
+      }
+    } catch {
+      toast({ title: "Gagal Mengirim", description: "Terjadi kesalahan. Coba lagi.", variant: "destructive" });
+    } finally {
+      setIsSubmittingTopUp(false);
+    }
+  };
+
+  const resetTopUpModal = () => {
+    setIsTopUpOpen(false);
+    setTopUpStep(1);
+    setTopUpAmount(null);
+    setTopUpCustomAmount("");
+    setTopUpProofFile(null);
+    setTopUpProofPreview(null);
+  };
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -237,6 +371,46 @@ export default function Profile() {
         description: "Terjadi kesalahan saat menyimpan perubahan",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleSubmitComplaint = async () => {
+    if (!complaintText.trim() || !userData) return;
+    setIsSubmittingComplaint(true);
+    try {
+      const response = await fetch("/api/complaints", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: userData.id,
+          bookingId: complaintModal.bookingId,
+          talentName: complaintModal.talentName,
+          description: complaintText.trim(),
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.message || "Komplain gagal disimpan ke database.");
+      }
+
+      const report = result.report;
+      window.dispatchEvent(new CustomEvent("newReport", { detail: { report } }));
+      localStorage.setItem("rentmate_complaints_updated", report.id);
+      toast({
+        title: "Komplain Berhasil Dikirim",
+        description: "Komplain Anda tersimpan dan sudah masuk ke daftar Laporan Admin.",
+      });
+      setComplaintModal({ isOpen: false, bookingId: "", talentName: "" });
+      setComplaintText("");
+    } catch (error) {
+      console.error("Gagal menyimpan komplain:", error);
+      toast({
+        title: "Komplain Gagal Dikirim",
+        description: error instanceof Error ? error.message : "Komplain belum tersimpan. Silakan coba lagi.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmittingComplaint(false);
     }
   };
 
@@ -299,19 +473,39 @@ export default function Profile() {
     navigate(`/chat/${chatId}`);
   };
 
+  const handleNotificationClick = async (notification: NotificationItem) => {
+    if (notification.type === "booking" || notification.type === "payment") {
+      setSelectedNotification(notification);
+      setIsNotificationDetailsOpen(true);
+    }
+
+    const updated = await markNotificationRead(notification.id);
+    if (updated) {
+      setUserData(updated);
+      setEditData(updated);
+    }
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    if (isMarkingAllNotificationsRead || !notifications.some(notification => !notification.read)) return;
+    setIsMarkingAllNotificationsRead(true);
+    try {
+      const updated = await markAllNotificationsRead();
+      if (updated) {
+        setUserData(updated);
+        setEditData(updated);
+      }
+    } finally {
+      setIsMarkingAllNotificationsRead(false);
+    }
+  };
+
   const menuItems = [
     {
       icon: Bell,
       label: "Notifikasi",
-      action: async () => {
+      action: () => {
         setActiveTab("notifications");
-        if (notifications.some((n) => !n.read)) {
-          const updated = await markAllNotificationsRead();
-          if (updated) {
-            setUserData(updated);
-            setEditData(updated);
-          }
-        }
       },
       badge: notifications.filter(n => !n.read).length
     },
@@ -549,15 +743,65 @@ export default function Profile() {
         </Card>
 
         {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <Tabs
+          value={activeTab}
+          onValueChange={(tab) => {
+            setActiveTab(tab);
+            const nextParams = new URLSearchParams(searchParams);
+            if (tab === "notifications") nextParams.set("tab", "notifications");
+            else nextParams.delete("tab");
+            setSearchParams(nextParams, { replace: true });
+          }}
+        >
           <TabsList className="w-full grid grid-cols-3 mb-6">
             <TabsTrigger value="bookings">Riwayat</TabsTrigger>
-            <TabsTrigger value="notifications">Notifikasi</TabsTrigger>
+            <TabsTrigger value="notifications" className="relative gap-2">
+              <Bell className="w-4 h-4" />
+              Notifikasi
+              {notifications.filter((notification) => !notification.read).length > 0 && (
+                <span
+                  aria-label={`${notifications.filter((notification) => !notification.read).length} notifikasi baru`}
+                  className="absolute -top-2 -right-1 min-w-5 h-5 px-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center shadow-sm"
+                >
+                  {notifications.filter((notification) => !notification.read).length > 99
+                    ? "99+"
+                    : notifications.filter((notification) => !notification.read).length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="settings">Pengaturan</TabsTrigger>
           </TabsList>
 
           {/* Bookings Tab */}
           <TabsContent value="bookings" className="space-y-4">
+            
+            {myTopUpRequests.length > 0 && (
+              <div className="mb-8">
+                <h2 className="text-lg font-semibold mb-4">Riwayat Isi Saldo</h2>
+                <div className="space-y-3">
+                  {myTopUpRequests.map(req => (
+                    <Card key={req.id} className="p-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${req.status === 'pending' ? 'bg-yellow-100' : req.status === 'approved' ? 'bg-green-100' : 'bg-red-100'}`}>
+                          <Wallet className={`w-5 h-5 ${req.status === 'pending' ? 'text-yellow-600' : req.status === 'approved' ? 'text-green-600' : 'text-red-600'}`} />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-sm">Isi Saldo Dompet</p>
+                          <p className="text-xs text-muted-foreground">{new Date(req.createdAt).toLocaleString("id-ID")}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold">{formatPrice(req.amount)}</p>
+                        <Badge variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : 'destructive'} className="mt-1">
+                          {req.status === 'pending' ? 'Menunggu' : req.status === 'approved' ? 'Berhasil' : 'Ditolak'}
+                        </Badge>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Riwayat Pemesanan</h2>
               <Button
@@ -607,14 +851,16 @@ export default function Profile() {
                           </div>
                           <Badge
                             variant={
-                              booking.status === "completed"
+                              booking.approvalStatus === "expired"
+                                ? "destructive"
+                                : booking.status === "completed"
                                 ? "success"
                                 : booking.status === "upcoming" || booking.approvalStatus === "approved"
                                 ? "accent"
                                 : "secondary"
                             }
                           >
-                            {booking.status || booking.approvalStatus || "Pending"}
+                            {booking.approvalStatus === "expired" ? "Kadaluarsa" : booking.status || booking.approvalStatus || "Pending"}
                           </Badge>
                         </div>
 
@@ -692,6 +938,24 @@ export default function Profile() {
                               <Eye className="w-4 h-4" />
                               Lihat Detail
                             </Button>
+                            {(booking.status === "completed" || booking.approvalStatus === "approved" || booking.status === "upcoming") && (
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                className="gap-1 ml-2"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setComplaintModal({
+                                    isOpen: true,
+                                    bookingId: booking.id,
+                                    talentName: talent.name,
+                                  });
+                                }}
+                              >
+                                <AlertTriangle className="w-4 h-4" />
+                                Komplain
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -715,26 +979,65 @@ export default function Profile() {
 
           {/* Notifications Tab */}
           <TabsContent value="notifications" className="space-y-4">
+             <div className="flex justify-end">
+               <Button
+                 variant="ghost"
+                 size="sm"
+                 onClick={() => void handleMarkAllNotificationsRead()}
+                 disabled={isMarkingAllNotificationsRead || !notifications.some(notification => !notification.read)}
+               >
+                 <CheckCircle className="mr-2 h-4 w-4" />
+                 Tandai semua dibaca
+               </Button>
+             </div>
              {notifications.length > 0 ? (
-                notifications.map((notif: any) => (
+                notifications.map((notif: any) => {
+                  const title = String(notif.title || '').toLowerCase();
+                  const message = String(notif.message || '').toLowerCase();
+                  const isTopUp = title.includes('top-up') || title.includes('isi saldo') || message.includes('isi saldo');
+                  const isTopUpRequest = isTopUp && (title.includes('terkirim') || title.includes('permintaan'));
+                  const isTopUpApproval = isTopUp && (title.includes('berhasil') || title.includes('disetujui'));
+                  const isTopUpRejected = isTopUp && (title.includes('ditolak') || message.includes('ditolak'));
+                  const isBooking = notif.type === 'booking' || title.includes('pesanan') || title.includes('pemesanan');
+                  const isBookingRejected = isBooking && (title.includes('ditolak') || message.includes('ditolak'));
+                  const isBookingApproved = isBooking && (title.includes('disetujui') || title.includes('berhasil'));
+                  const notificationLabel = isTopUpRejected ? 'Top-up ditolak' : isTopUpRequest ? 'Permintaan top-up' : isTopUpApproval ? 'Top-up disetujui' : isBookingRejected ? 'Booking ditolak' : isBookingApproved ? 'Booking disetujui' : isBooking ? 'Booking / pemesanan' : 'Pemberitahuan';
+                  const notificationStyle = isTopUpRejected || isBookingRejected
+                    ? 'bg-red-100 text-red-600'
+                    : isTopUpRequest
+                      ? 'bg-amber-100 text-amber-700'
+                      : isTopUpApproval || isBookingApproved
+                        ? 'bg-green-100 text-green-600'
+                        : isBooking
+                          ? 'bg-blue-100 text-blue-600'
+                          : 'bg-orange-100 text-orange-600';
+                  return (
                   <Card key={notif.id} className={`p-4 ${!notif.read ? 'bg-accent/10 border-l-4 border-l-primary' : ''}`}>
-                    <div className="flex items-start gap-4">
-                       <div className={`p-2 rounded-full ${notif.type === 'payment' ? 'bg-green-100 text-green-600' : notif.type === 'booking' ? 'bg-blue-100 text-blue-600' : 'bg-orange-100 text-orange-600'}`}>
-                          {notif.type === 'payment' ? <Wallet className="w-5 h-5" /> : notif.type === 'booking' ? <Calendar className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
+                    <button
+                      type="button"
+                      onClick={() => void handleNotificationClick(notif)}
+                      className="flex w-full items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                       <div className={`p-2 rounded-full ${notificationStyle}`}>
+                          {isTopUpRejected || isBookingRejected ? <AlertTriangle className="w-5 h-5" /> : isTopUpRequest ? <Clock className="w-5 h-5" /> : isTopUpApproval || isBookingApproved ? <CheckCircle className="w-5 h-5" /> : isTopUp ? <Wallet className="w-5 h-5" /> : isBooking ? <Calendar className="w-5 h-5" /> : <Bell className="w-5 h-5" />}
                        </div>
                        <div className="flex-1">
-                          <div className="flex justify-between items-start">
-                             <h4 className="font-semibold text-sm">{notif.title}</h4>
-                             <span className="text-xs text-muted-foreground">{notif.time}</span>
+                          <div className="flex justify-between items-start gap-3">
+                             <div>
+                               <Badge variant="outline" className={`mb-1 text-[10px] ${isTopUpRejected || isBookingRejected ? 'border-red-300 text-red-700' : isTopUpRequest ? 'border-amber-300 text-amber-700' : isTopUpApproval || isBookingApproved ? 'border-green-300 text-green-700' : isBooking ? 'border-blue-300 text-blue-700' : ''}`}>{notificationLabel}</Badge>
+                               <h4 className="font-semibold text-sm">{notif.title}</h4>
+                             </div>
+                             <span className="text-xs text-muted-foreground whitespace-nowrap">{notif.time}</span>
                           </div>
                           <p className="text-sm text-muted-foreground mt-1">{notif.message}</p>
-                          {notif.read && (
-                            <Badge variant="secondary" className="mt-2 text-xs">Sudah dibaca</Badge>
-                          )}
+                          <Badge variant="secondary" className="mt-2 text-xs">
+                            {notif.read ? "Sudah dibaca" : "Belum dibaca"}
+                          </Badge>
                        </div>
-                    </div>
+                    </button>
                   </Card>
-                ))
+                  );
+                })
              ) : (
                 <div className="text-center py-8 text-muted-foreground">
                    Tidak ada notifikasi
@@ -868,55 +1171,160 @@ export default function Profile() {
           </DialogContent>
         </Dialog>
 
-        {/* Top Up Modal */}
-        <Dialog open={isTopUpOpen} onOpenChange={setIsTopUpOpen}>
-          <DialogContent>
+        {/* Top Up Modal — 3 Langkah */}
+        <Dialog open={isTopUpOpen} onOpenChange={(open) => !open && resetTopUpModal()}>
+          <DialogContent className="sm:max-w-[480px]">
             <DialogHeader>
-              <DialogTitle>Isi Saldo</DialogTitle>
+              <DialogTitle className="flex items-center gap-2">
+                <Wallet className="w-5 h-5 text-primary" />
+                Isi Saldo Dompet
+              </DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">Pilih nominal untuk menambah saldo dompet Anda</p>
-              <div className="grid grid-cols-3 gap-3">
-                {TOP_UP_OPTIONS.map((amount) => (
-                  <Button
-                    key={amount}
-                    variant={topUpAmount === amount ? "hero" : "outline"}
-                    onClick={() => setTopUpAmount(amount)}
-                  >
-                    {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount)}
-                  </Button>
-                ))}
+
+            {/* Progress Steps */}
+            <div className="flex items-center gap-2 mb-2">
+              {[1, 2, 3].map(s => (
+                <div key={s} className={`flex-1 h-1.5 rounded-full ${topUpStep >= s ? "bg-primary" : "bg-muted"}`} />
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Langkah {topUpStep} dari 3: {topUpStep === 1 ? "Pilih Nominal" : topUpStep === 2 ? "Upload Bukti Transfer" : "Permintaan Dikirim"}
+            </p>
+
+            {/* STEP 1: Pilih Nominal */}
+            {topUpStep === 1 && (
+              <div className="space-y-4">
+                {/* Info rekening admin */}
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm space-y-1">
+                  <p className="font-semibold text-orange-800">📋 Transfer ke rekening berikut:</p>
+                  <p className="text-orange-700">BCA: <strong>1234 5678 90</strong> a/n PT TemanAcara</p>
+                  <p className="text-orange-700">BRI: <strong>9876 5432 10</strong> a/n PT TemanAcara</p>
+                </div>
+
+                <p className="text-sm text-muted-foreground">Pilih nominal top-up:</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {TOP_UP_OPTIONS.map((amount) => (
+                    <Button
+                      key={amount}
+                      variant={topUpAmount === amount ? "hero" : "outline"}
+                      size="sm"
+                      onClick={() => { setTopUpAmount(amount); setTopUpCustomAmount(""); }}
+                    >
+                      {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount)}
+                    </Button>
+                  ))}
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">Atau masukkan nominal lain:</p>
+                  <Input
+                    type="number"
+                    placeholder="Contoh: 150000"
+                    value={topUpCustomAmount}
+                    onChange={(e) => {
+                      setTopUpCustomAmount(e.target.value);
+                      setTopUpAmount(Number(e.target.value) || null);
+                    }}
+                  />
+                </div>
               </div>
+            )}
+
+            {/* STEP 2: Upload Bukti */}
+            {topUpStep === 2 && (
+              <div className="space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-800">
+                  <p className="font-semibold">Total Transfer: {formatPrice(topUpAmount || 0)}</p>
+                  <p className="text-xs mt-1">Upload screenshot / foto struk bukti transfer kamu.</p>
+                </div>
+                <div className="flex flex-col items-center gap-4">
+                  {topUpProofPreview ? (
+                    <div className="relative">
+                      <img src={topUpProofPreview} alt="Bukti" className="w-48 h-48 object-cover rounded-xl border" />
+                      <Button
+                        variant="destructive" size="sm"
+                        className="absolute -top-2 -right-2 w-6 h-6 p-0 rounded-full"
+                        onClick={() => { setTopUpProofFile(null); setTopUpProofPreview(null); }}
+                      >
+                        <X className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <label className="w-48 h-48 border-2 border-dashed border-muted rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-primary transition-colors gap-2 text-muted-foreground text-sm">
+                      <Camera className="w-8 h-8" />
+                      <span>Klik untuk Upload</span>
+                      <input type="file" accept="image/*" className="hidden" onChange={handleTopUpProofUpload} />
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: Sukses */}
+            {topUpStep === 3 && (
+              <div className="text-center py-6 space-y-3">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+                  <CheckCircle className="w-10 h-10 text-green-500" />
+                </div>
+                <h3 className="font-bold text-lg">Permintaan Terkirim!</h3>
+                <p className="text-sm text-muted-foreground">
+                  Permintaan top-up sebesar <strong>{formatPrice(topUpAmount || 0)}</strong> sedang menunggu verifikasi Admin.
+                  Saldo akan ditambahkan setelah Admin menyetujui bukti transfer kamu.
+                </p>
+                <p className="text-xs text-muted-foreground">Biasanya diproses dalam 1×24 jam</p>
+              </div>
+            )}
+
+            <DialogFooter className="mt-4">
+              {topUpStep === 1 && (
+                <>
+                  <Button variant="outline" onClick={resetTopUpModal}>Batal</Button>
+                  <Button onClick={() => setTopUpStep(2)} disabled={!topUpAmount || topUpAmount <= 0}>
+                    Lanjut →
+                  </Button>
+                </>
+              )}
+              {topUpStep === 2 && (
+                <>
+                  <Button variant="outline" onClick={() => setTopUpStep(1)}>← Kembali</Button>
+                  <Button onClick={handleSubmitTopUp} disabled={!topUpProofPreview || isSubmittingTopUp}>
+                    {isSubmittingTopUp ? "Mengirim..." : "Kirim Permintaan"}
+                  </Button>
+                </>
+              )}
+              {topUpStep === 3 && (
+                <Button className="w-full" onClick={resetTopUpModal}>Tutup</Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+
+        {/* Dialog Detail Transaksi */}
+        <Dialog
+          open={isNotificationDetailsOpen}
+          onOpenChange={(open) => {
+            setIsNotificationDetailsOpen(open);
+            if (!open) setSelectedNotification(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{selectedNotification?.title || "Detail notifikasi"}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm leading-6 text-muted-foreground">{selectedNotification?.message}</p>
+              {selectedNotification?.time && (
+                <p className="text-xs text-muted-foreground">{selectedNotification.time}</p>
+              )}
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => { setIsTopUpOpen(false); setTopUpAmount(null); }}>
-                Batal
-              </Button>
-              <Button
-                onClick={async () => {
-                  if (topUpAmount && userData) {
-                    const updated = await updateCurrentUser({ wallet: userData.wallet + topUpAmount });
-                    if (updated) {
-                      setUserData(updated);
-                      setEditData(updated);
-                      setIsTopUpOpen(false);
-                      setTopUpAmount(null);
-                      toast({
-                        title: "Saldo berhasil ditambahkan",
-                        description: `Saldo bertambah sebesar ${new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(topUpAmount)}`,
-                      });
-                    }
-                  }
-                }}
-                disabled={!topUpAmount}
-              >
-                Konfirmasi
+              <Button variant="outline" onClick={() => setIsNotificationDetailsOpen(false)}>
+                Tutup
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Dialog Detail Transaksi */}
         <Dialog open={showTransactionDialog} onOpenChange={(open) => !open && setShowTransactionDialog(false)}>
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -1035,6 +1443,32 @@ export default function Profile() {
             )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowTransactionDialog(false)}>Tutup</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={complaintModal.isOpen} onOpenChange={(open) => !open && setComplaintModal({ ...complaintModal, isOpen: false })}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Ajukan Komplain</DialogTitle>
+            </DialogHeader>
+            <div className="py-4">
+              <p className="text-sm text-muted-foreground mb-4">
+                Ada masalah dengan pesanan Anda bersama <strong>{complaintModal.talentName}</strong>? Ceritakan detailnya di bawah ini. Tim kami akan segera menindaklanjuti.
+              </p>
+              <Textarea
+                placeholder="Tuliskan keluhan atau masalah Anda di sini..."
+                value={complaintText}
+                onChange={(e) => setComplaintText(e.target.value)}
+                className="min-h-[120px]"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setComplaintModal({ ...complaintModal, isOpen: false })}>
+                Batal
+              </Button>
+              <Button variant="destructive" onClick={handleSubmitComplaint} disabled={isSubmittingComplaint || !complaintText.trim()}>
+                {isSubmittingComplaint ? "Mengirim..." : "Kirim Komplain"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

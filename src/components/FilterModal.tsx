@@ -147,13 +147,12 @@ export function FilterModal({ isOpen, onClose, filters, onApply }: FilterModalPr
     }));
   };
 
-  // Tambahkan fungsi untuk menangani perubahan availability
-  const handleAvailabilityChange = (availability: string, checked: boolean) => {
+  // Ketersediaan adalah pilihan tunggal: mode filter harus jelas online,
+  // offline, atau keduanya (bukan beberapa checkbox sekaligus).
+  const handleAvailabilityChange = (availability: string) => {
     setLocalFilters(prev => ({
       ...prev,
-      availability: checked
-        ? [...prev.availability, availability]
-        : prev.availability.filter(a => a !== availability)
+      availability: prev.availability.includes(availability) ? [] : [availability]
     }));
   };
 
@@ -196,7 +195,7 @@ export function FilterModal({ isOpen, onClose, filters, onApply }: FilterModalPr
             </Badge>
           )}
         </DialogHeader>
-        
+
         <div className="space-y-6 mt-4">
           {/* Gender Filter */}
           <div>
@@ -252,11 +251,14 @@ export function FilterModal({ isOpen, onClose, filters, onApply }: FilterModalPr
                 <label key={option.value} className="flex items-center space-x-2 cursor-pointer">
                   <Checkbox
                     checked={localFilters.availability.includes(option.value)}
-                    onCheckedChange={(checked) => handleAvailabilityChange(option.value, checked as boolean)}
+                    onCheckedChange={() => handleAvailabilityChange(option.value)}
                   />
                   <span className="text-sm">{option.label}</span>
                 </label>
               ))}
+              <p className="text-xs text-muted-foreground mt-1">
+                Pilih satu mode. Pilihan ini menyaring kemampuan mitra; lokasi offline tetap divalidasi saat pemesanan.
+              </p>
             </div>
           </div>
 

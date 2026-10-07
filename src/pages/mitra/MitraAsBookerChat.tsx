@@ -22,6 +22,7 @@ import {
   markMessagesAsReadByUser,
   setUserTyping,
   ChatMessage,
+  isChatSessionActive,
 } from "@/lib/chatStore";
 import { getCurrentMitra } from "@/lib/mitraStore";
 
@@ -257,18 +258,24 @@ export default function MitraAsBookerChatPage() {
             )}
           </CardContent>
           <div className="p-4 border-t shrink-0">
-            <div className="flex gap-2">
-              <Input
-                value={message}
-                onChange={(e) => handleTyping(e.target.value)}
-                placeholder="Ketik pesan..."
-                onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                disabled={isSending}
-              />
-              <Button onClick={handleSend} disabled={!message.trim() || isSending}>
-                {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              </Button>
-            </div>
+            {isChatSessionActive(session) ? (
+              <div className="flex gap-2">
+                <Input
+                  value={message}
+                  onChange={(e) => handleTyping(e.target.value)}
+                  placeholder="Ketik pesan..."
+                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                  disabled={isSending}
+                />
+                <Button onClick={handleSend} disabled={!message.trim() || isSending}>
+                  {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </Button>
+              </div>
+            ) : (
+              <div className="text-center text-sm text-muted-foreground p-2 bg-gray-100 rounded-md">
+                Sesi pesan ini telah berakhir (hanya aktif hingga 1 jam setelah waktu booking).
+              </div>
+            )}
           </div>
         </Card>
       </div>

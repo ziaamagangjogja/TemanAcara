@@ -76,6 +76,23 @@ export interface ChatSession {
   isTalentTyping?: boolean;
 }
 
+export function isChatSessionActive(session: ChatSession | null): boolean {
+  if (!session) return false;
+  try {
+    const startStr = `${session.date}T${session.time}`;
+    const startTime = new Date(startStr);
+    
+    // Add duration (hours) + 1 hour padding
+    const endTime = new Date(startTime.getTime());
+    endTime.setHours(endTime.getHours() + session.duration + 1);
+    
+    // Compare with current time
+    return new Date() <= endTime;
+  } catch (e) {
+    return true; // fail open if parse error
+  }
+}
+
 const STORAGE_KEY = "rentmate_chats";
 const STORAGE_VERSION_KEY = "rentmate_chats_version";
 const CURRENT_VERSION = "v4";
@@ -83,25 +100,18 @@ const CURRENT_VERSION = "v4";
 function loadChatsFromStorage(): ChatSession[] {
   if (typeof window === "undefined") return [];
   try {
-    // Auto-clear cache if schema version changed
-    const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
-    if (storedVersion !== CURRENT_VERSION) {
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.setItem(STORAGE_VERSION_KEY, CURRENT_VERSION);
-      return [];
-    }
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
+    // We are deprecating localStorage for chats because it exceeds quota.
+    // Clear existing data to free up space.
+    localStorage.removeItem(STORAGE_KEY);
+    return [];
   } catch {
     return [];
   }
 }
 
 function persistChatsToStorage(chats: ChatSession[]) {
-  if (typeof window !== "undefined") {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
-    localStorage.setItem(STORAGE_VERSION_KEY, CURRENT_VERSION);
-  }
+  // Deprecated: Do not save to localStorage to prevent QuotaExceededError
+  // We only rely on in-memory `cachedChats` and Supabase DB
 }
 
 let cachedChats: ChatSession[] = loadChatsFromStorage();
@@ -160,7 +170,9 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
         readByUser: true,
         readByMitra: true,
         readByMitraAsBooker: true,
-        isAutoResponse: false,
+        isAutoResponse:
+          m.is_auto_response === 1 ||
+          (m.sender_type === "talent" && m.message.startsWith("Halo! Terima kasih sudah booking untuk ")),
       }));
 
       // Gabungkan dengan pesan lokal yang belum tersimpan ke DB
@@ -264,6 +276,7 @@ async function saveMessageToSupabase(
         sender_id: newMessage.senderId,
         sender_type: newMessage.senderType,
         message: newMessage.message,
+        is_auto_response: newMessage.isAutoResponse === true,
         status: newMessage.status,
         created_at: newMessage.timestamp
       })

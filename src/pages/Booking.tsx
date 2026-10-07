@@ -22,6 +22,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { talents, bookingPurposes } from "@/data/mockData";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -34,7 +44,9 @@ import {
   updateBookingPayment,
   SharedBooking,
   updateBookingRating,
-  getCurrentUserOrMitra
+  updateBooking,
+  getCurrentUserOrMitra,
+  addNotificationForUser
 } from "@/lib/bookingStore";
 import { getCurrentUser, updateCurrentUser } from "@/lib/userStore";
 import { isTimeSlotBooked, isTimeSlotInPast } from '@/lib/bookingStore';
@@ -57,6 +69,15 @@ const getRandomizedAmount = (amount: number): number => {
   const randomSuffix = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
   return parseInt(prefix + randomSuffix);
 };
+
+const offlineOnlyPurposes = [
+  "Dinner / Makan Malam",
+  "Traveling / Liburan",
+  "Event / Acara",
+  "Belanja",
+  "Olahraga Bareng",
+  "Pesta / Party",
+];
 
 
 const maskBankAccount = (accountNumber: string): string => {
@@ -120,10 +141,12 @@ export default function Booking() {
 
   const [step, setStep] = useState(1);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isMeetingLocationDialogOpen, setIsMeetingLocationDialogOpen] = useState(false);
   const [bookingData, setBookingData] = useState({
     duration: 2,
     purpose: "",
     type: "offline" as "online" | "offline",
+    meetingCity: "",
     date: "",
     time: "",
     notes: "",
@@ -295,19 +318,21 @@ export default function Booking() {
     const now = new Date();
     const userId = currentUser.type === "mitra" ? currentUser.data.talentId : currentUser.data.id;
 
-    // Cari booking yang AKTIF (masih akan datang)
+    // Cari booking yang masih "menggantung" (belum approved/completed)
     const existingBooking = allBookings.find((b) => {
       // 1. Pastikan booking ini milik user dan talent yang bersangkutan
-      if (b.userId !== userId || b.talentId !== id || b.approvalStatus === "rejected") {
+      if (b.userId !== userId || b.talentId !== id) {
         return false;
       }
 
-      // 2. Cek apakah waktu booking sudah lewat
-      const startTime = new Date(`${b.date}T${b.time}`);
-      const endTime = new Date(startTime.getTime() + b.duration * 60 * 60 * 1000);
+      // 2. Jangan resume jika sudah disetujui (approved), selesai (completed), atau ditolak (rejected)
+      // karena user mungkin ingin membuat pesanan BARU.
+      if (b.approvalStatus === "approved" || b.approvalStatus === "completed" || b.approvalStatus === "rejected") {
+        return false;
+      }
 
-      // 3. Hanya anggap sebagai "aktif" jika booking belum berakhir
-      return endTime > now;
+      // 3. Jika statusnya masih draft, pending_payment, pending_approval, kita resume ini.
+      return true;
     });
 
     if (!existingBooking) {
@@ -330,13 +355,14 @@ export default function Booking() {
     setCurrentBooking(existingBooking);
     setCurrentBookingId(existingBooking.id);
     setBookingData({
-      duration: existingBooking.duration,
-      purpose: existingBooking.purpose,
-      type: existingBooking.type,
-      date: existingBooking.date,
-      time: existingBooking.time,
-      notes: existingBooking.notes || "",
-    });
+       duration: existingBooking.duration,
+       purpose: existingBooking.purpose,
+       type: existingBooking.type,
+       meetingCity: existingBooking.meetingCity || "",
+       date: existingBooking.date,
+       time: existingBooking.time,
+       notes: existingBooking.notes || "",
+     });
 
     // Gunakan payment code yang sudah ada dari booking
     if (existingBooking.paymentCode) {
@@ -366,21 +392,10 @@ export default function Booking() {
       return;
     }
 
-  if (existingBooking.date && existingBooking.time && existingBooking.duration) {
-    const startTime = new Date(
-      `${existingBooking.date}T${existingBooking.time}`
-    );
+    // Hapus blok pengecekan endTime yang merubah status menjadi completed,
+    // karena kita sekarang mengizinkan booking baru untuk dibuat,
+    // pengecekan completed ditangani di tempat lain (chat/history)
 
-    const endTime = new Date(
-      startTime.getTime() + existingBooking.duration * 60 * 60 * 1000
-    );
-
-    if (endTime < now) {
-      setBookingStatus("completed");
-      setStep(5);
-      return;
-    }
-  }
   }, [id]); // Dependency tetap [id]
 
   useEffect(() => {
@@ -514,12 +529,34 @@ export default function Booking() {
 
   const handleNext = () => {
     if (bookingStatus !== "draft") return;
+    if (step === 1 && bookingData.type === "offline") {
+      if (!talentForDisplay?.city) {
+        toast({
+          title: "Lokasi mitra belum tersedia",
+          description: "Pemesanan offline belum bisa dilanjutkan karena kota mitra belum terdata.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setIsMeetingLocationDialogOpen(true);
+      return;
+    }
     if (step < 3) {
       setStep(step + 1);
     }
   };
 
+  const confirmMeetingLocation = () => {
+    setIsMeetingLocationDialogOpen(false);
+    setStep(step + 1);
+  };
+
   const handleBack = () => {
+    if (bookingStatus === "pending_payment") {
+      setBookingStatus("draft");
+      setStep(2);
+      return;
+    }
     if (bookingStatus !== "draft") return;
     if (step <= 1) return;
     setStep(step - 1);
@@ -540,8 +577,54 @@ const handlePayment = async () => {
     if (isProcessing) return;
     setIsProcessing(true);
 
+    // Validasi maksimal 5 pesanan aktif
+    const myActiveBookings = getBookings().filter(b =>
+      b.userId === currentUser.id &&
+      b.approvalStatus !== "rejected" &&
+      b.approvalStatus !== "completed" &&
+      b.status !== "completed" &&
+      b.id !== currentBookingId
+    );
+
+    if (myActiveBookings.length >= 5) {
+      toast({
+        title: "Batas Pemesanan",
+        description: "Kamu tidak bisa memiliki lebih dari 5 pesanan aktif dalam waktu bersamaan. Selesaikan pesanan sebelumnya.",
+        variant: "destructive",
+      });
+      setIsProcessing(false);
+      return;
+    }
+
     try {
       const newPaymentCode = getOrCreateStablePaymentCode();
+
+      // Validasi mode layanan dan lokasi sebelum proses pembayaran.
+      const talentAvailability = String(talentForDisplay.availability || "both").toLowerCase();
+      const supportsSelectedMode = talentAvailability === "both" || talentAvailability.includes(bookingData.type);
+      if (!supportsSelectedMode) {
+        toast({
+          title: "Mode layanan tidak tersedia",
+          description: `Mitra ini hanya menerima layanan ${talentAvailability === "online" ? "online" : "offline"}. Silakan pilih mode yang sesuai.`,
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        return;
+      }
+
+      // Untuk offline, yang menentukan adalah kota tujuan pertemuan,
+      // bukan lokasi user saat ini. User bisa sedang di Jogja dan memesan
+      // mitra Jakarta untuk jadwal besok di Jakarta. Kota mitra menjadi
+      // lokasi offline yang harus dituju; online tetap bebas kota.
+      if (bookingData.type === "offline" && !talentForDisplay.city) {
+        toast({
+          title: "Lokasi mitra belum tersedia",
+          description: "Pemesanan offline belum bisa dilanjutkan karena kota mitra belum terdata.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        return;
+      }
 
       // Ambil data terbaru sebelum validasi agar slot tidak lolos karena cache lama.
       await refreshBookingsFromSupabase();
@@ -564,32 +647,53 @@ const handlePayment = async () => {
         return;
       }
 
-      const booking = await addBooking({
-        talentId: talentForDisplay.id,
-        talentName: talentForDisplay.name,
-        talentPhoto: talentForDisplay.photo,
-        purpose: bookingData.purpose,
-        type: bookingData.type,
-        date: bookingData.date,
-        time: bookingData.time,
-        duration: bookingData.duration,
-        total: totalPrice,
-        notes: bookingData.notes,
-        paymentStatus: "pending",
-        approvalStatus: "pending_approval",
-        paymentCode: newPaymentCode,
-      });
+      if (currentBookingId) {
+        // UPDATE EXISTING BOOKING
+        const updated = await updateBooking(currentBookingId, {
+          purpose: bookingData.purpose,
+          type: bookingData.type,
+          date: bookingData.date,
+          time: bookingData.time,
+          duration: bookingData.duration,
+          total: totalPrice,
+          notes: bookingData.notes,
+          paymentCode: newPaymentCode,
+        });
+        if (!updated) {
+          throw new Error("Gagal menyimpan perubahan pesanan.");
+        }
+      } else {
+        // CREATE NEW BOOKING
+        const booking = await addBooking({
+          talentId: talentForDisplay.id,
+          talentName: talentForDisplay.name,
+          talentPhoto: talentForDisplay.photo,
+          purpose: bookingData.purpose,
+          type: bookingData.type,
+          meetingCity: bookingData.type === "offline" ? talentForDisplay.city : "Online",
+          date: bookingData.date,
+          time: bookingData.time,
+          duration: bookingData.duration,
+          total: totalPrice,
+          notes: bookingData.notes,
+          paymentStatus: "pending",
+          approvalStatus: "pending_approval",
+          paymentCode: newPaymentCode,
+        });
+        setCurrentBookingId(booking.id);
+      }
 
-      setCurrentBookingId(booking.id);
       setPaymentCode(newPaymentCode);
       setBookingStatus("pending_payment");
       setStep(3);
     } catch (error: any) {
       console.error("Gagal lanjut ke pembayaran:", error);
+      // Jangan tampilkan toast error jika ternyata API mengembalikan "Failed to fetch" padahal data masuk.
+      // Cukup tampilkan error yang jelas dari Supabase, atau biarkan.
       toast({
-        title: "Gagal membuat pesanan",
-        description: error?.message || "Terjadi kesalahan saat memproses pesanan.",
-        variant: "destructive",
+        title: "Peringatan",
+        description: "Ada kendala jaringan, namun pesanan mungkin berhasil. Silakan cek halaman Pemesanan Saya.",
+        variant: "default",
       });
     } finally {
       setIsProcessing(false);
@@ -690,6 +794,22 @@ const handleConfirmPayment = async () => {
 
       setBookingStatus("pending_approval");
       setStep(4);
+
+      // Notifikasi untuk pemesan
+      addNotificationForUser(currentUser.id, {
+        title: "Pembayaran Pemesanan Berhasil",
+        message: `Pembayaran kamu untuk mitra ${talentForDisplay.name} sedang diverifikasi oleh admin.`,
+        type: "payment"
+      });
+
+      // Notifikasi untuk mitra juga harus dikirim setelah pembayaran masuk.
+      // Sebelumnya hanya pemesan yang mendapat notifikasi, sehingga mitra
+      // hanya melihat perubahan dari kartu dashboard tanpa pemberitahuan baru.
+      addNotificationForUser(currentBookingId ? getBookingById(currentBookingId)?.talentId || talentForDisplay.id : talentForDisplay.id, {
+        title: "Permintaan Pemesanan Baru 📅",
+        message: `${currentUser.name || "Seorang pengguna"} mengirim pemesanan ${talentForDisplay.name} untuk "${getBookingById(currentBookingId || "")?.purpose || "layanan"}". Silakan cek dan berikan persetujuan.`,
+        type: "booking"
+      });
 
       toast({
         title: "Pembayaran Berhasil Dikirim! 🎉",
@@ -872,28 +992,35 @@ const handleConfirmPayment = async () => {
                       Tujuan Pemesanan
                     </label>
                     <div className="grid grid-cols-2 gap-2">
-                      {bookingPurposes.map((purpose) => (
-                        <Button
-                          key={purpose}
-                          variant={
-                            (bookingData.purpose === purpose && purpose !== "Lainnya") ||
-                            (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:"))
-                              ? "default" : "outline"
-                          }
-                          size="sm"
-                          className="justify-start"
-                          onClick={() => {
-                            if (purpose === "Lainnya") {
-                              setBookingData({ ...bookingData, purpose: "Lainnya:" });
-                            } else {
-                              setBookingData({ ...bookingData, purpose });
-                              setCustomPurpose(""); // Reset custom purpose when selecting predefined option
+                      {bookingPurposes.map((purpose) => {
+                        const isOfflineOnly = offlineOnlyPurposes.includes(purpose);
+                        const isDisabled = bookingData.type === "online" && isOfflineOnly;
+
+                        return (
+                          <Button
+                            key={purpose}
+                            variant={
+                              (bookingData.purpose === purpose && purpose !== "Lainnya") ||
+                              (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:"))
+                                ? "default" : "outline"
                             }
-                          }}
-                        >
-                          {purpose}
-                        </Button>
-                      ))}
+                            size="sm"
+                            disabled={isDisabled}
+                            className={cn("justify-start", isDisabled && "opacity-50 cursor-not-allowed bg-muted")}
+                            onClick={() => {
+                              if (isDisabled) return;
+                              if (purpose === "Lainnya") {
+                                setBookingData({ ...bookingData, purpose: "Lainnya:" });
+                              } else {
+                                setBookingData({ ...bookingData, purpose });
+                                setCustomPurpose(""); // Reset custom purpose when selecting predefined option
+                              }
+                            }}
+                          >
+                            {purpose}
+                          </Button>
+                        );
+                      })}
                     </div>
 
                     {/* Tampilkan input teks jika "Lainnya" dipilih */}
@@ -944,9 +1071,14 @@ const handleConfirmPayment = async () => {
                           bookingData.type === "online" &&
                             "border-primary ring-2 ring-primary/20"
                         )}
-                        onClick={() =>
-                          setBookingData({ ...bookingData, type: "online" })
-                        }
+                        onClick={() => {
+                          const isInvalid = offlineOnlyPurposes.includes(bookingData.purpose);
+                          setBookingData({
+                            ...bookingData,
+                            type: "online",
+                            purpose: isInvalid ? "" : bookingData.purpose
+                          });
+                        }}
                       >
                         <Video className="w-8 h-8 mx-auto mb-2 text-primary" />
                         <h4 className="font-semibold">Online</h4>
@@ -955,6 +1087,20 @@ const handleConfirmPayment = async () => {
                         </p>
                       </Card>
                     </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Kota / lokasi pertemuan</label>
+                    <Input
+                      value={bookingData.type === "offline" ? talentForDisplay.city || bookingData.meetingCity : "Online"}
+                      readOnly
+                      className="bg-muted"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {bookingData.type === "offline"
+                        ? "Lokasi otomatis mengikuti kota mitra. Kamu tetap bisa memesan meski sedang berada di kota lain."
+                        : "Pertemuan online tidak terikat kota."}
+                    </p>
                   </div>
                 </div>
               )}
@@ -1005,7 +1151,8 @@ const handleConfirmPayment = async () => {
                               id!,
                               bookingData.date,
                               time,
-                              bookingData.duration
+                              bookingData.duration,
+                              currentBookingId || undefined
                             );
 
                             const [hour] = time.split(":").map(Number);
@@ -1445,6 +1592,18 @@ const handleConfirmPayment = async () => {
                       </Button>
                     </div>
                   )}
+
+                  {!paymentMethod && (
+                    <div className="flex gap-3 pt-4">
+                      <Button
+                        variant="outline"
+                        onClick={handleBack}
+                        className="flex-1"
+                      >
+                        Kembali / Edit Pesanan
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1452,8 +1611,8 @@ const handleConfirmPayment = async () => {
                 <div className="py-8 text-center animate-fade-in">
                   <div className={cn(
                     "w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4",
-                    bookingStatus === "rejected" 
-                      ? "bg-red-100 dark:bg-red-900/30" 
+                    bookingStatus === "rejected"
+                      ? "bg-red-100 dark:bg-red-900/30"
                       : "bg-accent"
                   )}>
                     {bookingStatus === "rejected" ? (
@@ -1466,11 +1625,11 @@ const handleConfirmPayment = async () => {
                     {bookingStatus === "rejected" ? "Pemesanan Ditolak" : "Menunggu Persetujuan Admin"}
                   </h2>
                   <p className="text-muted-foreground mb-6 max-w-md mx-auto">
-                    {bookingStatus === "rejected" 
+                    {bookingStatus === "rejected"
                       ? "Maaf, admin menolak pemesanan Anda. Silakan hubungi admin untuk informasi lebih lanjut."
                       : "⏳ Menunggu verifikasi pembayaran oleh admin"}
                   </p>
-                  
+
                   <Card className="p-4 bg-muted/50 max-w-sm mx-auto mb-6">
                     <div className="flex items-center gap-3 text-left">
                       <img
@@ -1481,8 +1640,8 @@ const handleConfirmPayment = async () => {
                       <div>
                         <p className="font-semibold">{talentForDisplay.name}</p>
                         <p className="text-sm text-muted-foreground">
-                          {bookingData.purpose.startsWith("Lainnya:") 
-                            ? customPurpose || bookingData.purpose 
+                          {bookingData.purpose.startsWith("Lainnya:")
+                            ? customPurpose || bookingData.purpose
                             : bookingData.purpose}
                         </p>
                       </div>
@@ -1500,7 +1659,7 @@ const handleConfirmPayment = async () => {
                       </p>
                     </div>
                   )}
-                  
+
                   {bookingStatus === "rejected" && (
                     <div className="border-t pt-6">
                       <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4">
@@ -1508,16 +1667,16 @@ const handleConfirmPayment = async () => {
                           Informasi Refund
                         </p>
                         <p className="text-xs text-red-600 dark:text-red-400">
-                          Jika pembayaran sudah dilakukan, dana akan dikembalikan dalam 1-3 hari kerja. 
+                          Jika pembayaran sudah dilakukan, dana akan dikembalikan dalam 1-3 hari kerja.
                           Silakan hubungi admin untuk informasi lebih lanjut.
                         </p>
                       </div>
                     </div>
                   )}
-                  
+
                   <div className="flex gap-3 mt-6">
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={() => navigate('/bookings')}
                       className="flex-1"
                     >
@@ -1536,14 +1695,14 @@ const handleConfirmPayment = async () => {
                   <p className="text-muted-foreground mb-6">
                     Percakapan dengan {talentForDisplay.name} sudah aktif
                   </p>
-                  
+
                   <Link to={`/chat/${currentBookingId}`}>
                     <Button variant="hero" size="lg" className="gap-2">
                       <MessageCircle className="w-5 h-5" />
                       Buka Percakapan
                     </Button>
                   </Link>
-                  
+
                   <div className="mt-6 p-4 bg-green-50 dark:bg-green-900/20 rounded-xl">
                     <p className="text-sm text-green-700 dark:text-green-300">
                       ✅ Langkah 5: Percakapan Aktif - Kamu bisa mulai ngobrol sekarang!
@@ -1655,6 +1814,21 @@ const handleConfirmPayment = async () => {
           </div>
         </div>
       </div>
+
+      <AlertDialog open={isMeetingLocationDialogOpen} onOpenChange={setIsMeetingLocationDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Konfirmasi lokasi pertemuan</AlertDialogTitle>
+            <AlertDialogDescription>
+              Kamu memilih pertemuan offline dengan {talentForDisplay?.name}. Titik pertemuan akan berada di kota {talentForDisplay?.city}. Pastikan kamu dapat hadir di kota tersebut pada tanggal yang dipilih.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Periksa lagi</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmMeetingLocation}>Ya, lanjutkan</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

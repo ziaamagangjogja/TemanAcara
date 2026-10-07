@@ -25,6 +25,9 @@ import {
   Plus,
   Edit,
   Trash2,
+  Wallet,
+  RefreshCw,
+  UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -43,6 +46,7 @@ import {
   SharedBooking,
   getBookings,
   getPendingBookings,
+  getRefundPendingBookings,
   updateBookingApproval,
   subscribeToBookings,
   refreshBookingsFromSupabase,
@@ -56,6 +60,12 @@ import {
   checkVerificationDeadlines,
   updateTalentProfile,
 } from "@/lib/mitraStore";
+import {
+  getAllTopUpRequests,
+  approveTopUpRequest,
+  rejectTopUpRequest,
+  TopUpRequest
+} from "@/lib/topupStore";
 
 // Tambahkan tipe untuk status pembayaran
 // Catatan: SharedBooking memakai "pending" | "paid", jadi samakan agar konsisten.
@@ -105,6 +115,7 @@ export default function Admin() {
   const { settings, updateSettings } = useAppSettings();
   const [searchQuery, setSearchQuery] = useState("");
   const [bookings, setBookings] = useState<SharedBooking[]>([]);
+  const [refundPendingBookings, setRefundPendingBookings] = useState<SharedBooking[]>([]);
   const { toast } = useToast();
   const [stats, setStats] = useState<StatItem[]>([
     { label: "Total Pengguna", value: "0", icon: Users },
@@ -127,6 +138,7 @@ export default function Admin() {
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<{ type: string; url: string } | null>(null);
   const [reports, setReports] = useState<any[]>([]);
+  const [isLoadingReports, setIsLoadingReports] = useState(false);
   const [verificationTab, setVerificationTab] = useState("pending");
 
   // State untuk pengaturan
@@ -172,6 +184,10 @@ export default function Admin() {
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [faviconFile, setFaviconFile] = useState<File | null>(null);
+
+  // State untuk topup
+  const [topUpRequests, setTopUpRequests] = useState<TopUpRequest[]>([]);
+  const [isLoadingTopUps, setIsLoadingTopUps] = useState(false);
 
   // State untuk dialog detail transaksi
   const [showTransactionDialog, setShowTransactionDialog] = useState(false);
@@ -354,6 +370,7 @@ export default function Admin() {
       paymentStatus: (booking.paymentProof ? "paid" : "pending") as PaymentStatus,
     }));
     setBookings(processedBookings);
+    setRefundPendingBookings(getRefundPendingBookings());
 
     // Update state talent
     setAllTalents(verifiedTalents);
@@ -537,16 +554,50 @@ export default function Admin() {
   }, [toast]);
 
   // Fungsi untuk memuat laporan (dipisah)
-  const loadReports = useCallback(() => {
+  const loadReports = useCallback(async () => {
+    setIsLoadingReports(true);
+    let localReports: any[] = [];
     try {
-      const savedReports = JSON.parse(localStorage.getItem("lovable_reports") || "[]");
-      // PERFORMA: Gunakan startTransition untuk pembaruan state yang tidak mendesak
+      localReports = JSON.parse(localStorage.getItem("lovable_reports") || "[]");
+    } catch (error) {
+      console.error("Error loading local reports:", error);
+    }
+
+    try {
+      const response = await fetch("/api/complaints");
+      if (!response.ok) throw new Error("Gagal mengambil komplain dari database.");
+      const complaints = await response.json();
+      const databaseReports = complaints.map((complaint: any) => ({
+        ...complaint,
+        name: complaint.userName,
+        email: complaint.userEmail,
+        phone: complaint.userPhone,
+        category: "Komplain Pesanan",
+        source: "user",
+      }));
+      const databaseReportIds = new Set(databaseReports.map((report: any) => report.id));
       startTransition(() => {
-        setReports(savedReports);
+        setReports([...databaseReports, ...localReports.filter(report => !databaseReportIds.has(report.id))]);
       });
     } catch (error) {
-      console.error("Error loading reports:", error);
-      setReports([]);
+      console.error("Error loading database complaints:", error);
+      startTransition(() => setReports(localReports));
+    } finally {
+      setIsLoadingReports(false);
+    }
+  }, []);
+
+  const loadTopUpRequests = useCallback(async () => {
+    setIsLoadingTopUps(true);
+    try {
+      const requests = await getAllTopUpRequests();
+      startTransition(() => {
+        setTopUpRequests(requests);
+      });
+    } catch (error) {
+      console.error("Error loading topup requests:", error);
+    } finally {
+      setIsLoadingTopUps(false);
     }
   }, []);
 
@@ -567,11 +618,33 @@ export default function Admin() {
     const timeoutId = setTimeout(() => {
       loadVerifications();
       loadReports();
+      loadTopUpRequests();
       checkVerificationDeadlines();
     }, 100); // 100ms delay
 
     return () => clearTimeout(timeoutId);
-  }, [loadVerifications, loadReports]);
+  }, [loadVerifications, loadReports, loadTopUpRequests]);
+
+  // Handle updates from other windows
+  useEffect(() => {
+    const handleTopUpUpdate = () => {
+      loadTopUpRequests();
+    };
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (e.key === "rentmate_topup_requests") {
+        loadTopUpRequests();
+      }
+      if (e.key === "lovable_reports" || e.key === "rentmate_complaints_updated") {
+        loadReports();
+      }
+    };
+    window.addEventListener("topupRequestsUpdated", handleTopUpUpdate);
+    window.addEventListener("storage", handleStorageUpdate);
+    return () => {
+      window.removeEventListener("topupRequestsUpdated", handleTopUpUpdate);
+      window.removeEventListener("storage", handleStorageUpdate);
+    };
+  }, [loadTopUpRequests]);
 
   // Fetch mitra count langsung dari API saat komponen mount - sebagai safety net
   useEffect(() => {
@@ -642,6 +715,7 @@ export default function Admin() {
         paymentStatus: (booking.paymentProof ? "paid" : "pending") as PaymentStatus,
       }));
       setBookings(processedBookings);
+      setRefundPendingBookings(getRefundPendingBookings());
     });
 
     const unsubscribeMitra = subscribeToMitraChanges(async () => {
@@ -807,6 +881,30 @@ export default function Admin() {
       title: "Pembayaran Diverifikasi Admin",
       description: `Pesanan diteruskan ke Mitra (${booking.talentName}). Menunggu konfirmasi persetujuan dari Mitra.`,
     });
+  };
+
+  const handleMarkRefundCompleted = async (bookingId: string) => {
+    try {
+      const response = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_status: "refunded" }),
+      });
+      if (!response.ok) throw new Error("Status refund gagal diperbarui.");
+
+      await refreshBookingsFromSupabase();
+      setRefundPendingBookings(getRefundPendingBookings());
+      toast({
+        title: "Refund Ditandai Selesai",
+        description: "Pastikan dana sudah dikembalikan sebelum menandai proses ini selesai.",
+      });
+    } catch (error) {
+      toast({
+        title: "Gagal Memperbarui Refund",
+        description: error instanceof Error ? error.message : "Silakan coba lagi.",
+        variant: "destructive",
+      });
+    }
   };
 
   // PERBAIKAN: Fungsi handleRejectBooking yang diperbaiki
@@ -1186,8 +1284,18 @@ export default function Admin() {
     });
   };
 
-  const updateReportStatus = (reportId: string, newStatus: string) => {
+  const updateReportStatus = async (reportId: string, newStatus: string) => {
     try {
+      const report = reports.find(item => item.id === reportId);
+      if (report?.source === "user") {
+        const response = await fetch(`/api/complaints/${encodeURIComponent(reportId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: newStatus }),
+        });
+        if (!response.ok) throw new Error("Status komplain gagal diperbarui di database.");
+        await loadReports();
+      } else {
       const reports = JSON.parse(localStorage.getItem("lovable_reports") || "[]");
       const updatedReports = reports.map(report =>
         report.id === reportId
@@ -1197,6 +1305,7 @@ export default function Admin() {
 
       localStorage.setItem("lovable_reports", JSON.stringify(updatedReports));
       setReports(updatedReports);
+      }
 
       toast({
         title: "Status Diperbarui",
@@ -1207,7 +1316,7 @@ export default function Admin() {
       console.error("Error updating report status:", error);
       toast({
         title: "Error",
-        description: "Gagal memperbarui status laporan.",
+        description: error instanceof Error ? error.message : "Gagal memperbarui status laporan.",
         variant: "destructive"
       });
     }
@@ -1344,7 +1453,13 @@ export default function Admin() {
           </div>
         )}
 
-        <Tabs defaultValue="approvals" className="space-y-6">
+        <Tabs
+          defaultValue="approvals"
+          className="space-y-6"
+          onValueChange={(value) => {
+            if (value === "reports") void loadReports();
+          }}
+        >
           <TabsList className="flex flex-wrap w-full gap-2 bg-muted/50 p-2 rounded-xl">
             <TabsTrigger value="approvals" className="relative gap-1">
               <Clock className="w-4 h-4" />
@@ -1381,12 +1496,48 @@ export default function Admin() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="topups" className="relative gap-1">
+              <Wallet className="w-4 h-4" />
+              Top Up
+              {topUpRequests.filter(r => r.status === 'pending').length > 0 && (
+                <span
+                  className="absolute -top-2 -right-2 inline-flex items-center justify-center h-5 w-5 text-xs font-bold text-white bg-red-500 rounded-full"
+                >
+                  {topUpRequests.filter(r => r.status === 'pending').length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="revenue">Pendapatan</TabsTrigger>
             <TabsTrigger value="cities">Kota</TabsTrigger>
             <TabsTrigger value="settings">Pengaturan</TabsTrigger>
           </TabsList>
 
           <TabsContent value="approvals" className="space-y-4">
+            {refundPendingBookings.length > 0 && (
+              <Card className="border-amber-300 bg-amber-50/60 p-5">
+                <div className="mb-4">
+                  <h2 className="font-semibold">Pengembalian Dana Perlu Diproses</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Jadwal pesanan sudah lewat. Kembalikan dana secara manual sebelum menandai refund selesai.
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  {refundPendingBookings.map((booking) => (
+                    <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background p-3">
+                      <div>
+                        <p className="font-medium">{booking.userName || "Pengguna"} · {booking.talentName || "Mitra"}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {booking.date} · {booking.time} · {formatCurrency(booking.total || 0)} · {booking.paymentMethod || "Pembayaran"}
+                        </p>
+                      </div>
+                      <Button size="sm" onClick={() => handleMarkRefundCompleted(booking.id)}>
+                        Tandai Refund Selesai
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold">Pemesanan Menunggu Persetujuan</h2>
@@ -1840,15 +1991,27 @@ export default function Admin() {
           <TabsContent value="reports" className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold">Laporan Mitra</h2>
+                <h2 className="text-xl font-bold">Laporan & Komplain</h2>
                 <p className="text-muted-foreground text-sm">
-                  Laporan yang dikirim oleh mitra dan menunggu penanganan
+                  Laporan mitra dan komplain pelanggan yang menunggu penanganan
                 </p>
               </div>
-              <Badge variant="outline" className="gap-1">
-                <FileText className="w-3 h-3" />
-                {pendingReports.length} Menunggu
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => void loadReports()}
+                  disabled={isLoadingReports}
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingReports ? "animate-spin" : ""}`} />
+                  Muat Ulang
+                </Button>
+                <Badge variant="outline" className="gap-1">
+                  <FileText className="w-3 h-3" />
+                  {pendingReports.length} Menunggu
+                </Badge>
+              </div>
             </div>
 
             {reports.length > 0 ? (
@@ -1867,6 +2030,11 @@ export default function Admin() {
                             <p className="text-xs text-muted-foreground mt-1">
                               Kategori: {report.category} • {new Date(report.createdAt).toLocaleDateString("id-ID")}
                             </p>
+                            {report.source === "user" && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Komplain pelanggan • Mitra: {report.talentName} • ID Pesanan: {report.bookingId}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <Badge
@@ -1944,7 +2112,120 @@ export default function Admin() {
               <Card className="p-8 text-center">
                 <FileText className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
                 <h3 className="text-xl font-bold mb-2">Tidak Ada Laporan</h3>
-                <p className="text-muted-foreground">Belum ada laporan yang dikirim oleh mitra.</p>
+                <p className="text-muted-foreground">Belum ada laporan atau komplain yang masuk.</p>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="topups" className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Permintaan Isi Saldo (Top-Up)</h2>
+                <p className="text-muted-foreground text-sm">
+                  Kelola permintaan isi saldo dompet dari pengguna
+                </p>
+              </div>
+              <Badge variant="outline" className="gap-1">
+                <Wallet className="w-3 h-3" />
+                {topUpRequests.filter(r => r.status === "pending").length} Menunggu
+              </Badge>
+            </div>
+            {topUpRequests.length > 0 ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                {topUpRequests.map((request) => (
+                  <Card key={request.id} className="overflow-hidden">
+                    <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_128px]">
+                      <div className="min-w-0">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-primary">
+                              {request.userPhoto ? (
+                                <img src={request.userPhoto} alt="" className="h-full w-full object-cover" />
+                              ) : (
+                                <UserRound className="h-5 w-5" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <h3 className="truncate font-bold">{request.userName || "Pengguna"}</h3>
+                              <p className="break-all text-xs text-muted-foreground">{request.userEmail}</p>
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="font-bold text-sm text-primary">{formatCurrency(request.amount)}</p>
+                            <Badge
+                              variant={request.status === "pending" ? "warning" : request.status === "approved" ? "success" : "destructive"}
+                            >
+                              {request.status === "pending" ? "Menunggu" : request.status === "approved" ? "Disetujui" : "Ditolak"}
+                            </Badge>
+                          </div>
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">{new Date(request.createdAt).toLocaleString("id-ID")}</p>
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold mb-2">Bukti Transfer</p>
+                        <button
+                          type="button"
+                          className="flex h-40 w-full items-center justify-center overflow-hidden rounded-lg bg-muted p-2"
+                          onClick={() => request.proofImageBase64 && window.open(request.proofImageBase64, "_blank", "noopener,noreferrer")}
+                          aria-label="Lihat bukti transfer ukuran penuh"
+                        >
+                          {request.proofImageBase64 ? (
+                            <img src={request.proofImageBase64} alt="Bukti Transfer" className="max-h-full max-w-full rounded border bg-background object-contain" />
+                          ) : (
+                            <span className="text-sm text-muted-foreground">Bukti transfer tidak tersedia</span>
+                          )}
+                        </button>
+                      </div>
+
+                      {request.status === "pending" && (
+                        <div className="grid gap-2 border-t pt-3 sm:col-span-2 sm:grid-cols-2">
+                            <Button
+                              className="h-9 w-full px-2 text-xs"
+                              onClick={async () => {
+                                try {
+                                  const { success } = await approveTopUpRequest(request.id, "Telah diverifikasi Admin");
+                                  if (success) {
+                                    toast({ title: "Berhasil", description: "Saldo pengguna telah ditambahkan." });
+                                    loadTopUpRequests();
+                                  }
+                                } catch (e) {
+                                  toast({ title: "Error", description: "Gagal menyetujui topup", variant: "destructive" });
+                                }
+                              }}
+                            >
+                              <CheckCircle className="mr-2 h-4 w-4 shrink-0" />
+                              Setujui & Tambah Saldo
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              className="h-9 w-full px-2 text-xs"
+                              onClick={async () => {
+                                try {
+                                  const success = await rejectTopUpRequest(request.id, "Bukti transfer tidak valid");
+                                  if (success) {
+                                    toast({ title: "Ditolak", description: "Permintaan top-up telah ditolak." });
+                                    loadTopUpRequests();
+                                  }
+                                } catch (e) {
+                                  toast({ title: "Error", description: "Gagal menolak topup", variant: "destructive" });
+                                }
+                              }}
+                            >
+                              <XCircle className="mr-2 h-4 w-4 shrink-0" />
+                              Tolak
+                            </Button>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="p-8 text-center">
+                <Wallet className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
+                <h3 className="text-xl font-bold mb-2">Tidak Ada Permintaan</h3>
+                <p className="text-muted-foreground">Belum ada permintaan isi saldo saat ini.</p>
               </Card>
             )}
           </TabsContent>

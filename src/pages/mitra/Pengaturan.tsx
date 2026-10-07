@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, type ChangeEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useCallback, useMemo, useRef, type ChangeEvent } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Settings,
   Calendar,
@@ -46,6 +46,7 @@ import { EarningsDetails } from "@/components/mitra/EarningsDetails";
 
 export default function Pengaturan() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   const [currentMitra, setCurrentMitra] = useState<any>(null);
   const [bookings, setBookings] = useState<any[]>([]);
@@ -59,6 +60,9 @@ export default function Pengaturan() {
   // State untuk dialog detail transaksi
   const [showTransactionDialog, setShowTransactionDialog] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const openBookingIdRef = useRef<string | null>(
+    (location.state as { openBookingId?: string } | null)?.openBookingId || null
+  );
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -235,6 +239,16 @@ export default function Pengaturan() {
         booking.talentId === mitra.talentId
       );
       setBookings(mitraBookings);
+      const requestedBookingId = openBookingIdRef.current;
+      const requestedBooking = requestedBookingId
+        ? mitraBookings.find(booking => booking.id === requestedBookingId)
+        : undefined;
+      if (requestedBooking) {
+        setSelectedTransaction(requestedBooking);
+        setShowTransactionDialog(true);
+        openBookingIdRef.current = null;
+        navigate(location.pathname, { replace: true, state: null });
+      }
       setCurrentMitra(previous => previous ? {
         ...previous,
         rating: calculateMitraRating(mitra.talentId),
@@ -243,7 +257,7 @@ export default function Pengaturan() {
     } catch (err) {
       console.error("Gagal refresh booking:", err);
     }
-  }, [calculateEarnings]);
+  }, [calculateEarnings, location.pathname, navigate]);
 
   // Memuat data mitra dan booking saat pertama kali mount
   useEffect(() => {
@@ -360,6 +374,8 @@ export default function Pengaturan() {
         return <Badge variant="default">Selesai</Badge>;
       case "rejected":
         return <Badge variant="destructive">Ditolak</Badge>;
+      case "expired":
+        return <Badge variant="destructive">Kadaluarsa</Badge>;
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
