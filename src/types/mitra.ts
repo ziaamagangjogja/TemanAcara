@@ -56,6 +56,7 @@ export interface MitraRegistrationData {
   experience_level?: string;
   price_expectation?: string;
   social_media?: string;
+  portfolio_file?: string;
 }
 
 // ================= LOGIN =================

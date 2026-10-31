@@ -1,8 +1,7 @@
-// src/pages/MitraRegister.tsx
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2, Info } from "lucide-react";
+import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2, Info, FileText, Image, Trash2, ExternalLink } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -61,6 +60,11 @@ export default function MitraRegister() {
   const [hasUserProfile, setHasUserProfile] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
+  const [portfolioFile, setPortfolioFile] = useState<string | null>(null);
+  const [portfolioFileName, setPortfolioFileName] = useState<string | null>(null);
+  const [portfolioPreview, setPortfolioPreview] = useState<string | null>(null);
+  const [portfolioLink, setPortfolioLink] = useState<string>("");
+  const portfolioFileRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -180,6 +184,41 @@ export default function MitraRegister() {
     }
   };
 
+  // Fungsi untuk menangani upload berkas / gambar portofolio
+  const handlePortfolioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        toast({
+          title: "Upload Gagal",
+          description: "Ukuran berkas portofolio maksimal 10MB",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setPortfolioFileName(file.name);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        setPortfolioFile(result);
+        if (file.type.startsWith("image/")) {
+          setPortfolioPreview(result);
+        } else {
+          setPortfolioPreview(null);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemovePortfolio = () => {
+    setPortfolioFile(null);
+    setPortfolioFileName(null);
+    setPortfolioPreview(null);
+    if (portfolioFileRef.current) portfolioFileRef.current.value = "";
+  };
+
   // Fungsi untuk pendaftaran
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -234,6 +273,19 @@ export default function MitraRegister() {
       return;
     }
 
+    // Validasi Portofolio: Wajib jika memilih layanan Spesialis / Pro
+    const isSpecialist = formData.experienceLevel === "spesialis";
+    const finalPortfolio = portfolioFile || portfolioLink.trim() || "";
+
+    if (isSpecialist && !finalPortfolio) {
+      toast({
+        title: "Portofolio Wajib Diisi",
+        description: "Untuk kategori layanan Spesialis / Pro, Anda wajib melampirkan berkas/gambar portofolio atau link sertifikat keahlian sebagai bukti kualifikasi.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -251,6 +303,7 @@ export default function MitraRegister() {
         experience_level: formData.experienceLevel,
         price_expectation: formData.priceExpectation,
         social_media: formData.socialMedia,
+        portfolio_file: finalPortfolio,
         // Harga tidak disertakan karena akan ditentukan secara objektif oleh admin
       });
 
@@ -270,6 +323,7 @@ export default function MitraRegister() {
         experience_level: formData.experienceLevel,
         price_expectation: formData.priceExpectation,
         social_media: formData.socialMedia,
+        portfolio_file: finalPortfolio,
         status: "pending",
         verificationStatus: "pending",
         isVerified: false,
@@ -300,8 +354,8 @@ export default function MitraRegister() {
     return (
       <div className="min-h-screen bg-gradient-warm flex items-center justify-center p-4">
         <Card className="w-full max-w-md p-8 text-center shadow-xl border-primary/20">
-          <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <CheckCircle2 className="w-8 h-8 text-green-600" />
+          <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="w-8 h-8 text-orange-600" />
           </div>
           <h1 className="text-2xl font-bold mb-2">Pendaftaran Berhasil! 🎉</h1>
           <p className="text-muted-foreground text-sm mb-4">
@@ -673,6 +727,111 @@ export default function MitraRegister() {
                   onChange={(e) => handleInputChange("ktpLink", e.target.value)}
                   required
                 />
+              </div>
+            </div>
+
+            {/* Unggah Berkas / Portofolio Keahlian */}
+            <div className={`p-4 rounded-xl border transition-all ${
+              formData.experienceLevel === "spesialis"
+                ? "bg-orange-50/50 border-orange-300 dark:border-orange-800"
+                : "bg-muted/30 border-border"
+            }`}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <Label htmlFor="portfolioDoc" className="text-sm font-semibold flex items-center gap-1.5 text-foreground">
+                  <FileText className="w-4 h-4 text-orange-600 shrink-0" />
+                  Berkas / Portofolio Keahlian
+                </Label>
+                {formData.experienceLevel === "spesialis" ? (
+                  <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-semibold shrink-0">
+                    Wajib untuk Spesialis / Pro
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[11px] text-muted-foreground font-normal shrink-0">
+                    Opsional
+                  </Badge>
+                )}
+              </div>
+
+              <p className="text-xs text-muted-foreground leading-relaxed mb-3">
+                {formData.experienceLevel === "spesialis" ? (
+                  <span className="text-orange-900 font-medium">
+                    ⚠️ Karena Anda memilih kategori <strong>Spesialis / Pro</strong>, wajib melampirkan berkas gambar portofolio atau link portofolio/sertifikat keahlian agar admin dapat menyetujui tarif tinggi yang diajukan.
+                  </span>
+                ) : (
+                  "Unggah gambar contoh karya/portofolio, sertifikat keahlian, atau cantumkan link portofolio pendukung untuk memperbesar peluang tarif Anda disetujui lebih tinggi oleh admin."
+                )}
+              </p>
+
+              {/* Upload File Gambar / Dokumen */}
+              <div className="space-y-2">
+                <Input
+                  id="portfolioDoc"
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={handlePortfolioUpload}
+                  ref={portfolioFileRef}
+                  className="hidden"
+                />
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => portfolioFileRef.current?.click()}
+                    className="gap-2 border-orange-300 hover:bg-orange-50 text-xs sm:text-sm font-medium"
+                  >
+                    <Upload className="w-4 h-4 text-orange-600" />
+                    {portfolioFileName ? "Ganti Berkas Portofolio" : "Unggah Gambar / File Portofolio"}
+                  </Button>
+
+                  {portfolioFileName && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRemovePortfolio}
+                      className="text-xs text-destructive hover:bg-destructive/10 h-9 px-2 gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Hapus
+                    </Button>
+                  )}
+                </div>
+
+                {/* Preview Berkas Portofolio jika ada */}
+                {portfolioFileName && (
+                  <div className="mt-2 p-2.5 bg-background rounded-lg border border-orange-200 flex items-center gap-3 animate-in fade-in">
+                    {portfolioPreview ? (
+                      <img
+                        src={portfolioPreview}
+                        alt="Preview Portofolio"
+                        className="w-16 h-16 rounded-md object-cover border border-orange-200 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md bg-orange-100 text-orange-700 flex items-center justify-center shrink-0">
+                        <FileText className="w-6 h-6" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold truncate text-foreground">{portfolioFileName}</p>
+                      <p className="text-[11px] text-orange-700 font-medium">✓ Berkas portofolio siap dilampirkan</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Input Alternatif / Tambahan: Link Portofolio Drive / Web */}
+                <div className="pt-2">
+                  <div className="relative">
+                    <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="portfolioLink"
+                      placeholder="Atau tautan link portofolio (Drive, Behance, GitHub, Website)"
+                      className="pl-9 text-xs sm:text-sm"
+                      value={portfolioLink}
+                      onChange={(e) => setPortfolioLink(e.target.value)}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </div>

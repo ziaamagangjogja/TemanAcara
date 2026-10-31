@@ -343,6 +343,7 @@ export async function registerMitra(
         experience_level: data.experience_level || 'menengah',
         price_expectation: data.price_expectation || 'Rp 50.000 - Rp 85.000',
         social_media: data.social_media || '',
+        portfolio_file: data.portfolio_file || '',
       }),
     });
     console.log('Response dari server diterima:', response);

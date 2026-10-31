@@ -127,6 +127,8 @@ type VerificationItem = {
   rejection_reason?: string;
   pricing_tier?: string;
   appeal_note?: string;
+  appeal_file?: string | null;
+  portfolio_file?: string | null;
   admin_price_note?: string;
 };
 
@@ -660,6 +662,8 @@ export default function Admin() {
         experience_level: mitra.experience_level || "acara",
         price_expectation: mitra.price_expectation || "Rp 250.000 - Rp 350.000",
         social_media: mitra.social_media || "",
+        portfolio_file: mitra.portfolio_file || null,
+        appeal_file: mitra.appeal_file || null,
         rejection_reason: mitra.rejection_reason || null,
         pricing_tier: mitra.pricing_tier || "tier2",
       }));
@@ -691,6 +695,8 @@ export default function Admin() {
             experience_level: mitra.experience_level || "acara",
             price_expectation: mitra.price_expectation || "Rp 250.000 - Rp 350.000",
             social_media: mitra.social_media || "",
+            portfolio_file: mitra.portfolio_file || null,
+            appeal_file: mitra.appeal_file || null,
             rejection_reason: mitra.rejection_reason || null,
             pricing_tier: mitra.pricing_tier || "tier2",
             appeal_note: mitra.appeal_note,
@@ -2743,6 +2749,24 @@ export default function Admin() {
                             ) : (
                               <p className="text-xs text-muted-foreground italic">KTP belum diunggah</p>
                             )}
+                            {user.portfolio_file && (
+                              <div className="pt-1 flex items-center gap-1.5">
+                                <FileText className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                <span className="text-xs font-semibold text-orange-800">Portofolio:</span>
+                                {user.portfolio_file.startsWith("data:image") || user.portfolio_file.startsWith("http") ? (
+                                  <a
+                                    href={user.portfolio_file}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-primary font-medium hover:underline inline-flex items-center gap-1"
+                                  >
+                                    Lihat Portofolio ↗
+                                  </a>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground truncate">{user.portfolio_file}</span>
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           {user.status === "pending" && (
@@ -3000,6 +3024,56 @@ export default function Admin() {
                               </div>
                             ) : (
                               <p className="text-xs text-muted-foreground italic">KTP belum diunggah</p>
+                            )}
+                            {user.portfolio_file && (
+                              <div className="pt-1 flex items-center gap-1.5">
+                                <FileText className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                <span className="text-xs font-semibold text-foreground">Portofolio Pendaftaran:</span>
+                                <a
+                                  href={user.portfolio_file}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary font-medium hover:underline inline-flex items-center gap-1"
+                                >
+                                  Buka Portofolio ↗
+                                </a>
+                              </div>
+                            )}
+                            {user.appeal_file && (
+                              <div className="mt-2 p-2 rounded-lg bg-orange-50/80 border border-orange-200">
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <FileText className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                  <span className="text-xs font-bold text-orange-900">Bukti Portofolio Banding:</span>
+                                </div>
+                                {user.appeal_file.startsWith("data:image") ? (
+                                  <div className="flex items-center gap-2">
+                                    <img
+                                      src={user.appeal_file}
+                                      alt="Bukti Banding"
+                                      className="w-12 h-12 rounded object-cover border border-orange-200 cursor-pointer"
+                                      onClick={() => window.open(user.appeal_file || "", '_blank')}
+                                    />
+                                    <a
+                                      href={user.appeal_file}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-xs text-primary font-semibold hover:underline"
+                                    >
+                                      Perbesar Gambar ↗
+                                    </a>
+                                  </div>
+                                ) : (
+                                  <a
+                                    href={user.appeal_file}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-primary font-semibold hover:underline inline-flex items-center gap-1"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                    Buka Link Bukti Banding ↗
+                                  </a>
+                                )}
+                              </div>
                             )}
                           </div>
 
@@ -5059,6 +5133,94 @@ export default function Admin() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Portofolio & Bukti Kualifikasi Pendukung */}
+                  {(selectedVerification.portfolio_file || selectedVerification.appeal_file) && (
+                    <div className="p-3.5 rounded-xl border bg-orange-50/40 border-orange-200 space-y-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-orange-900 flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-orange-600" />
+                        Portofolio & Bukti Kualifikasi
+                      </h4>
+
+                      {selectedVerification.portfolio_file && (
+                        <div className="p-2.5 rounded-lg bg-background border border-orange-200/80 space-y-1.5">
+                          <span className="text-[11px] font-semibold text-orange-800 block">
+                            Portofolio Pendaftaran:
+                          </span>
+                          {selectedVerification.portfolio_file.startsWith("data:image") ? (
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={selectedVerification.portfolio_file}
+                                alt="Portofolio Pendaftaran"
+                                className="w-16 h-16 rounded-lg object-cover border border-orange-200 cursor-pointer"
+                                onClick={() => window.open(selectedVerification.portfolio_file || "", "_blank")}
+                              />
+                              <div>
+                                <p className="text-xs font-medium text-foreground">Gambar Portofolio Dilampirkan</p>
+                                <a
+                                  href={selectedVerification.portfolio_file}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary font-semibold underline inline-flex items-center gap-1 mt-1"
+                                >
+                                  <ExternalLink className="w-3 h-3" /> Buka Ukuran Penuh
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            <a
+                              href={selectedVerification.portfolio_file}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary font-semibold underline inline-flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              {selectedVerification.portfolio_file}
+                            </a>
+                          )}
+                        </div>
+                      )}
+
+                      {selectedVerification.appeal_file && (
+                        <div className="p-2.5 rounded-lg bg-background border border-orange-200/80 space-y-1.5">
+                          <span className="text-[11px] font-bold text-orange-900 block">
+                            Bukti Portofolio / Sertifikat Tambahan (Banding Tarif):
+                          </span>
+                          {selectedVerification.appeal_file.startsWith("data:image") ? (
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={selectedVerification.appeal_file}
+                                alt="Bukti Portofolio Banding"
+                                className="w-16 h-16 rounded-lg object-cover border border-orange-200 cursor-pointer"
+                                onClick={() => window.open(selectedVerification.appeal_file || "", "_blank")}
+                              />
+                              <div>
+                                <p className="text-xs font-medium text-foreground">Bukti Portofolio Penguat Banding</p>
+                                <a
+                                  href={selectedVerification.appeal_file}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary font-semibold underline inline-flex items-center gap-1 mt-1"
+                                >
+                                  <ExternalLink className="w-3 h-3" /> Buka Ukuran Penuh
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            <a
+                              href={selectedVerification.appeal_file}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary font-semibold underline inline-flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              {selectedVerification.appeal_file}
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Deskripsi Diri */}
                   <div className="p-3.5 rounded-xl border bg-card space-y-1.5">

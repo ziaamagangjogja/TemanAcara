@@ -24,7 +24,11 @@ import {
   UserCheck,
   Check,
   AlertTriangle,
-  Scale
+  Scale,
+  FileText,
+  Upload,
+  Trash2,
+  ExternalLink
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -36,6 +40,11 @@ export default function MitraVerification() {
   const [showAppealForm, setShowAppealForm] = useState(false);
   const [appealPrice, setAppealPrice] = useState('');
   const [appealReason, setAppealReason] = useState('');
+  const [appealFile, setAppealFile] = useState<string | null>(null);
+  const [appealFileName, setAppealFileName] = useState<string | null>(null);
+  const [appealFilePreview, setAppealFilePreview] = useState<string | null>(null);
+  const [appealLink, setAppealLink] = useState('');
+  const appealFileRef = useRef<HTMLInputElement>(null);
   const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
   const [appealSent, setAppealSent] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
@@ -68,6 +77,8 @@ export default function MitraVerification() {
           price_accepted: Boolean(data.price_accepted),
           rejection_reason: data.rejection_reason || '',
           appeal_note: data.appeal_note || '',
+          appeal_file: data.appeal_file || '',
+          portfolio_file: data.portfolio_file || '',
           admin_price_note: data.admin_price_note || '',
         };
 
@@ -165,6 +176,7 @@ export default function MitraVerification() {
 
     setIsSubmittingAppeal(true);
     try {
+      const finalAppealFile = appealFile || appealLink.trim() || '';
       const res = await fetch('/api/mitra/appeal-price', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -173,6 +185,7 @@ export default function MitraVerification() {
           userId: mitra.id || mitra.user_id,
           requestedPrice: Number(appealPrice),
           note: appealReason,
+          appeal_file: finalAppealFile,
         }),
       });
 
@@ -180,9 +193,13 @@ export default function MitraVerification() {
 
       setAppealSent(true);
       setShowAppealForm(false);
+      setAppealFile(null);
+      setAppealFileName(null);
+      setAppealFilePreview(null);
+      setAppealLink('');
       toast({
         title: "Banding Tarif Terkirim 📬",
-        description: "Admin akan meninjau permohonan penyesuaian tarif Anda.",
+        description: "Admin akan meninjau permohonan penyesuaian tarif beserta bukti portofolio Anda.",
       });
       fetchLatestStatus(true);
     } catch (err: any) {
@@ -194,6 +211,39 @@ export default function MitraVerification() {
     } finally {
       setIsSubmittingAppeal(false);
     }
+  };
+
+  const handleAppealFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        toast({
+          title: "Upload Gagal",
+          description: "Ukuran berkas pendukung maksimal 10MB",
+          variant: "destructive",
+        });
+        return;
+      }
+      setAppealFileName(file.name);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        setAppealFile(result);
+        if (file.type.startsWith("image/")) {
+          setAppealFilePreview(result);
+        } else {
+          setAppealFilePreview(null);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveAppealFile = () => {
+    setAppealFile(null);
+    setAppealFileName(null);
+    setAppealFilePreview(null);
+    if (appealFileRef.current) appealFileRef.current.value = "";
   };
 
   const status = mitra?.verificationStatus || mitra?.status || 'pending';
@@ -433,13 +483,13 @@ export default function MitraVerification() {
 
         {/* DYNAMIC CARD: CASE B - APPROVED (WAITING FOR TARIFF CONSENSUS) */}
         {isApproved && (
-          <Card className="p-6 md:p-8 border-emerald-200 bg-gradient-to-br from-emerald-50/50 via-card to-card shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 transform translate-x-4 -translate-y-4 w-32 h-32 bg-emerald-400/10 rounded-full blur-2xl pointer-events-none" />
+          <Card className="p-6 md:p-8 border-orange-200 bg-gradient-to-br from-orange-50/40 via-card to-card shadow-lg relative overflow-hidden">
+            <div className="absolute top-0 right-0 transform translate-x-4 -translate-y-4 w-32 h-32 bg-orange-400/10 rounded-full blur-2xl pointer-events-none" />
 
             <div className="text-center md:text-left space-y-4">
               <div className="flex flex-col md:flex-row items-center gap-4">
-                <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 flex items-center justify-center shrink-0 shadow-md">
-                  <Sparkles className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
+                <div className="w-16 h-16 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center shrink-0 shadow-md">
+                  <Sparkles className="w-8 h-8 text-orange-600" />
                 </div>
                 <div>
                   <h3 className="text-2xl font-bold text-foreground">
@@ -465,7 +515,7 @@ export default function MitraVerification() {
                     <p className="font-semibold text-amber-800 dark:text-amber-300">Alasan Penolakan Banding dari Admin:</p>
                     <p className="italic text-foreground">{mitra.admin_price_note.replace('[BANDING DITOLAK]', '').trim()}</p>
                   </div>
-                  <p className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                  <p className="text-xs text-orange-800 font-medium">
                     ✓ Pendaftaran Anda tetap disetujui! Anda dapat langsung menyetujui tarif resmi awal ini di bawah untuk mengaktifkan akun dan mulai menerima order.
                   </p>
                 </div>
@@ -473,25 +523,50 @@ export default function MitraVerification() {
 
               {/* Notifikasi Jika Banding Tarif Masih Dalam Peninjauan Admin */}
               {mitra?.appeal_note && !mitra?.admin_price_note?.includes('[BANDING DITOLAK]') && (
-                <div className="p-4 rounded-2xl bg-blue-500/10 border-2 border-blue-500/30 text-blue-950 dark:text-blue-200 space-y-2 my-4 animate-in fade-in">
-                  <div className="flex items-center gap-2 font-bold text-sm text-blue-800 dark:text-blue-300">
-                    <Scale className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />
+                <div className="p-4 rounded-2xl bg-orange-500/10 border-2 border-orange-500/30 text-orange-950 space-y-2 my-4 animate-in fade-in">
+                  <div className="flex items-center gap-2 font-bold text-sm text-orange-800">
+                    <Scale className="w-5 h-5 text-orange-600 shrink-0" />
                     Permohonan Banding Tarif Sedang Ditinjau Admin
                   </div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     Permohonan penyesuaian tarif Anda sedang dievaluasi oleh tim kurasi. Anda tetap dapat menyetujui tarif awal kapan saja jika ingin langsung mengaktifkan akun.
                   </p>
-                  <div className="p-2.5 bg-card/90 rounded-xl border border-blue-200 dark:border-blue-900/40 text-xs italic text-foreground">
+                  <div className="p-2.5 bg-card/90 rounded-xl border border-orange-200 text-xs italic text-foreground">
                     {mitra.appeal_note}
                   </div>
+                  {mitra.appeal_file && (
+                    <div className="pt-1">
+                      <p className="text-[11px] font-semibold text-orange-800 mb-1">Bukti Portofolio Terlampir:</p>
+                      {mitra.appeal_file.startsWith('data:image') || mitra.appeal_file.startsWith('http') ? (
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={mitra.appeal_file}
+                            alt="Bukti Banding"
+                            className="w-12 h-12 rounded object-cover border border-orange-300 cursor-pointer"
+                            onClick={() => window.open(mitra.appeal_file, '_blank')}
+                          />
+                          <a
+                            href={mitra.appeal_file}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary underline flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" /> Lihat Bukti Portofolio
+                          </a>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{mitra.appeal_file}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Box Tampilan Tarif Resmi */}
-              <div className="bg-card border-2 border-emerald-500/30 rounded-2xl p-6 shadow-sm my-6">
+              <div className="bg-card border-2 border-orange-400/30 rounded-2xl p-6 shadow-sm my-6">
                 <div className="flex flex-col md:flex-row items-center justify-between gap-6">
                   <div>
-                    <span className="text-xs uppercase font-bold tracking-wider text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/60 px-2.5 py-1 rounded-md">
+                    <span className="text-xs uppercase font-bold tracking-wider text-orange-800 bg-orange-100 px-2.5 py-1 rounded-md">
                       Tarif Resmi yang Ditetapkan Admin
                     </span>
                     <div className="flex items-baseline gap-2 mt-2">
@@ -501,7 +576,7 @@ export default function MitraVerification() {
                       <span className="text-muted-foreground text-sm font-medium">/ jam</span>
                     </div>
                     <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                      <Award className="w-4 h-4 text-emerald-600" />
+                      <Award className="w-4 h-4 text-orange-600" />
                       <span>Kategori Kelas: <strong>{pricingTierLabel}</strong></span>
                     </div>
                   </div>
@@ -528,7 +603,7 @@ export default function MitraVerification() {
                       size="lg"
                       onClick={handleAcceptPrice}
                       disabled={isAccepting}
-                      className="w-full sm:flex-1 gap-2 font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 h-12"
+                      className="w-full sm:flex-1 gap-2 font-bold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white shadow-md shadow-orange-500/20 h-12"
                     >
                       <CheckCircle2 className="w-5 h-5" />
                       {isAccepting ? "Mengaktifkan Akun..." : "Setujui Tarif & Buka Dashboard Mitra ➔"}
@@ -574,7 +649,7 @@ export default function MitraVerification() {
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    Tuliskan nominal tarif yang Anda harapkan beserta alasan pendukung (misal sertifikat, pengalaman kerja di bidang terkait, atau portofolio tambahan).
+                    Tuliskan nominal tarif yang Anda harapkan beserta alasan dan bukti portofolio / sertifikat pendukung sebagai penguat argumen agar admin menyetujui tarif Anda.
                   </p>
 
                   <div className="space-y-2">
@@ -590,15 +665,94 @@ export default function MitraVerification() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="appealReason" className="text-xs">Alasan & Bukti Kualifikasi Tambahan</Label>
+                    <Label htmlFor="appealReason" className="text-xs">Alasan & Penguat Banding</Label>
                     <Textarea
                       id="appealReason"
-                      placeholder="Jelaskan mengapa Anda mengajukan tarif tersebut..."
+                      placeholder="Jelaskan sertifikat, jam terbang, portofolio karya, atau alasan spesifik mengapa Anda layak mendapatkan tarif tersebut..."
                       rows={3}
                       value={appealReason}
                       onChange={(e) => setAppealReason(e.target.value)}
                       required
                     />
+                  </div>
+
+                  {/* Upload Berkas Portofolio / Bukti Pendukung Banding */}
+                  <div className="space-y-2 p-3 bg-background rounded-xl border border-orange-200">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="appealProofFile" className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
+                        <FileText className="w-3.5 h-3.5 text-orange-600" />
+                        Lampirkan Bukti Portofolio / Sertifikat (Opsional Penguat Banding)
+                      </Label>
+                      <Badge variant="outline" className="text-[10px]">Opsional</Badge>
+                    </div>
+
+                    <Input
+                      id="appealProofFile"
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={handleAppealFileUpload}
+                      ref={appealFileRef}
+                      className="hidden"
+                    />
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => appealFileRef.current?.click()}
+                        className="gap-1.5 text-xs border-orange-300 hover:bg-orange-50"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-orange-600" />
+                        {appealFileName ? "Ganti Berkas" : "Unggah Bukti Portofolio"}
+                      </Button>
+
+                      {appealFileName && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleRemoveAppealFile}
+                          className="text-xs text-destructive hover:bg-destructive/10 h-8 px-2 gap-1"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Hapus
+                        </Button>
+                      )}
+                    </div>
+
+                    {appealFileName && (
+                      <div className="mt-2 p-2 bg-orange-50/60 rounded-lg border border-orange-200 flex items-center gap-2">
+                        {appealFilePreview ? (
+                          <img
+                            src={appealFilePreview}
+                            alt="Bukti Portofolio"
+                            className="w-12 h-12 rounded object-cover border border-orange-200 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-10 h-10 rounded bg-orange-100 text-orange-700 flex items-center justify-center shrink-0">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold truncate text-foreground">{appealFileName}</p>
+                          <p className="text-[10px] text-orange-700">✓ Bukti siap dilampirkan ke pengajuan banding</p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="pt-1.5">
+                      <div className="relative">
+                        <ExternalLink className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                        <Input
+                          id="appealLink"
+                          placeholder="Atau masukkan tautan Google Drive / link portofolio online"
+                          className="pl-8 text-xs h-8"
+                          value={appealLink}
+                          onChange={(e) => setAppealLink(e.target.value)}
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-end gap-2 pt-2">
@@ -614,7 +768,7 @@ export default function MitraVerification() {
                       type="submit"
                       size="sm"
                       disabled={isSubmittingAppeal}
-                      className="gap-2"
+                      className="gap-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-medium shadow-xs"
                     >
                       <Send className="w-3.5 h-3.5" />
                       {isSubmittingAppeal ? "Mengirim..." : "Kirim Permohonan Banding ke Admin"}
@@ -624,8 +778,8 @@ export default function MitraVerification() {
               )}
 
               {appealSent && (
-                <div className="mt-4 p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-xs">
-                  Permohonan banding Anda telah dicatat. Anda tetap dapat menyetujui tarif saat ini kapan saja jika ingin langsung mulai bekerja.
+                <div className="mt-4 p-4 rounded-xl bg-orange-50 border border-orange-200 text-orange-950 text-xs">
+                  Permohonan banding Anda telah dicatat beserta bukti portofolio. Anda tetap dapat menyetujui tarif saat ini kapan saja jika ingin langsung mulai bekerja.
                 </div>
               )}
 

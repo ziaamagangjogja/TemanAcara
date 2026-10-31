@@ -105,6 +105,7 @@ app.post('/register-talent', async (req, res) => {
     experience_level,
     price_expectation,
     social_media,
+    portfolio_file,
   } = req.body;
   
   try {
@@ -119,8 +120,8 @@ app.post('/register-talent', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     await pool.query(
-      `INSERT INTO profiles (user_id, email, password, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO profiles (user_id, email, password, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       [
         userId,
         email,
@@ -137,6 +138,7 @@ app.post('/register-talent', async (req, res) => {
         experience_level || 'menengah',
         price_expectation || 'Rp 50.000 - Rp 85.000',
         social_media || '',
+        portfolio_file || null,
       ]
     );
 
@@ -201,12 +203,12 @@ app.get('/api/mitra/status', async (req, res) => {
     let rows;
     if (userId) {
       [rows] = await pool.query(
-        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, status, rejection_reason, appeal_note, admin_price_note, created_at FROM profiles WHERE user_id = ?',
+        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, portfolio_file, status, rejection_reason, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE user_id = ?',
         [userId]
       );
     } else {
       [rows] = await pool.query(
-        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, status, rejection_reason, appeal_note, admin_price_note, created_at FROM profiles WHERE email = ?',
+        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, portfolio_file, status, rejection_reason, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE email = ?',
         [email]
       );
     }
@@ -238,15 +240,15 @@ app.post('/api/mitra/accept-price', async (req, res) => {
 });
 
 app.post('/api/mitra/appeal-price', async (req, res) => {
-  const { email, userId, note, requestedPrice } = req.body;
+  const { email, userId, note, requestedPrice, appeal_file } = req.body;
   if (!email && !userId) {
     return res.status(400).json({ message: 'Email atau userId dibutuhkan.' });
   }
   try {
     const formattedNote = `[BANDING TARIF: Rp ${Number(requestedPrice || 0).toLocaleString('id-ID')}/jam] ${note || ''}`;
     await pool.query(
-      'UPDATE profiles SET appeal_note = ?, admin_price_note = NULL WHERE email = ? OR user_id = ?',
-      [formattedNote, email || '', userId || '']
+      'UPDATE profiles SET appeal_note = ?, appeal_file = ?, admin_price_note = NULL WHERE email = ? OR user_id = ?',
+      [formattedNote, appeal_file || null, email || '', userId || '']
     );
     res.status(200).json({ message: 'Permohonan banding tarif Anda telah dikirim ke admin.' });
   } catch (error) {
@@ -259,7 +261,7 @@ app.post('/api/mitra/appeal-price', async (req, res) => {
 app.get('/api/admin/appeals', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, ktp, age, experience_level, price_expectation, social_media, status, appeal_note, admin_price_note, created_at 
+      `SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status, appeal_note, appeal_file, admin_price_note, created_at 
        FROM profiles 
        WHERE appeal_note IS NOT NULL AND TRIM(appeal_note) != '' AND (price_accepted = 0 OR price_accepted IS NULL)
        ORDER BY created_at DESC`
@@ -299,7 +301,7 @@ app.post('/api/admin/reject-appeal', async (req, res) => {
 app.get('/pending-talents', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, status, appeal_note, admin_price_note, created_at FROM profiles WHERE status = "pending"'
+      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE status = "pending"'
     );
     res.status(200).json(rows);
   } catch (error) {
