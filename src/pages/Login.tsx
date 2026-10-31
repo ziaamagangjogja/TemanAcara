@@ -6,7 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { getCurrentUser } from "@/lib/userStore";
-import { saveCurrentMitraSession } from "@/lib/storageHelper";
+import { 
+  saveCurrentMitraSession, 
+  safeSetLocalStorage, 
+  safeRemoveLocalStorage, 
+  cleanupStorageQuota 
+} from "@/lib/storageHelper";
 
 
 export default function Login() {
@@ -34,11 +39,13 @@ export default function Login() {
       const usernameOnly = formData.email.split("@")[0];
 
       try {
+        cleanupStorageQuota();
+
         if (isLogin) {
-          localStorage.removeItem("rentmate_current_username");
-          localStorage.removeItem("mitraAuthenticated");
-          localStorage.removeItem("rentmate_current_mitra");
-          localStorage.removeItem("rentmate_current_user");
+          safeRemoveLocalStorage("rentmate_current_username");
+          safeRemoveLocalStorage("mitraAuthenticated");
+          safeRemoveLocalStorage("rentmate_current_mitra");
+          safeRemoveLocalStorage("rentmate_current_user");
 
           // 1. Coba login sebagai regular User.
           //    Bisa pakai email ATAU username (banyak user mengingat username).
@@ -50,10 +57,14 @@ export default function Login() {
 
           let userResponse: Response | null = null;
           for (const url of candidates) {
-            const res = await fetch(url);
-            if (res.ok) {
-              userResponse = res;
-              break;
+            try {
+              const res = await fetch(url);
+              if (res.ok) {
+                userResponse = res;
+                break;
+              }
+            } catch (fetchErr) {
+              console.warn(`Fetch ${url} failed:`, fetchErr);
             }
           }
 
@@ -73,9 +84,23 @@ export default function Login() {
               return;
             }
 
-            localStorage.setItem("rentmate_current_username", data.username);
-            localStorage.setItem("rentmate_current_user", JSON.stringify(data));
-            window.dispatchEvent(new CustomEvent("userUpdated"));
+            // Bersihkan base64 besar dari user object sebelum disimpan ke localStorage
+            // agar tidak menyebabkan QuotaExceededError (5MB browser limit).
+            const safeUserData = {
+              ...data,
+              photo: data.photo && typeof data.photo === "string" && data.photo.length > 5000 && data.photo.startsWith("data:") 
+                ? "" 
+                : data.photo,
+            };
+
+            safeSetLocalStorage("rentmate_current_username", data.username);
+            safeSetLocalStorage("rentmate_current_user", JSON.stringify(safeUserData));
+
+            try {
+              window.dispatchEvent(new CustomEvent("userUpdated"));
+            } catch (dispatchErr) {
+              console.warn("userUpdated dispatch warning:", dispatchErr);
+            }
 
             toast({
               title: "Login Berhasil! 🎉",
@@ -90,46 +115,50 @@ export default function Login() {
           }
 
           // 2. Jika tidak ditemukan di tabel users, coba login sebagai Mitra
-          const mitraRes = await fetch('/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: formData.email,
-              password: formData.password,
-            }),
-          });
-
-          if (mitraRes.ok) {
-            const result = await mitraRes.json();
-            const mitraUser = {
-              ...result.user,
-              talentId: result.user.talentId || result.user.id || result.user.user_id,
-              isOnline: true,
-              lastActive: new Date().toISOString(),
-            };
-            saveCurrentMitraSession(mitraUser);
-
-            toast({
-              title: "Login Mitra Berhasil! 🎉",
-              description: "Selamat datang kembali di Portal Mitra RentMate",
+          try {
+            const mitraRes = await fetch('/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: formData.email,
+                password: formData.password,
+              }),
             });
 
-            setTimeout(() => {
-              navigate("/mitra/dashboard", { replace: true });
-            }, 300);
-            setIsLoading(false);
-            return;
-          } else {
-            const errorData = await mitraRes.json().catch(() => null);
-            if (errorData && errorData.message && errorData.message.includes('belum disetujui')) {
+            if (mitraRes.ok) {
+              const result = await mitraRes.json();
+              const mitraUser = {
+                ...result.user,
+                talentId: result.user.talentId || result.user.id || result.user.user_id,
+                isOnline: true,
+                lastActive: new Date().toISOString(),
+              };
+              saveCurrentMitraSession(mitraUser);
+
               toast({
-                title: "Akun Menunggu Verifikasi",
-                description: "Akun Mitra Anda belum disetujui oleh admin. Silakan tunggu persetujuan.",
-                variant: "destructive",
+                title: "Login Mitra Berhasil! 🎉",
+                description: "Selamat datang kembali di Portal Mitra RentMate",
               });
+
+              setTimeout(() => {
+                navigate("/mitra/dashboard", { replace: true });
+              }, 300);
               setIsLoading(false);
               return;
+            } else {
+              const errorData = await mitraRes.json().catch(() => null);
+              if (errorData && errorData.message && errorData.message.includes('belum disetujui')) {
+                toast({
+                  title: "Akun Menunggu Verifikasi",
+                  description: "Akun Mitra Anda belum disetujui oleh admin. Silakan tunggu persetujuan.",
+                  variant: "destructive",
+                });
+                setIsLoading(false);
+                return;
+              }
             }
+          } catch (mitraErr) {
+            console.warn("Mitra fallback login fetch failed:", mitraErr);
           }
 
           // 3. Jika tidak ditemukan di manapun
@@ -141,10 +170,10 @@ export default function Login() {
           setIsLoading(false);
           return;
         } else {
-          localStorage.removeItem("rentmate_current_username");
-          localStorage.removeItem("mitraAuthenticated");
-          localStorage.removeItem("rentmate_current_mitra");
-          localStorage.removeItem("rentmate_current_user");
+          safeRemoveLocalStorage("rentmate_current_username");
+          safeRemoveLocalStorage("mitraAuthenticated");
+          safeRemoveLocalStorage("rentmate_current_mitra");
+          safeRemoveLocalStorage("rentmate_current_user");
 
           const response = await fetch('/api/users', {
             method: 'POST',
@@ -174,12 +203,22 @@ export default function Login() {
             return;
           }
           const data = await response.json();
+          const safeData = {
+            ...data,
+            photo: data.photo && typeof data.photo === "string" && data.photo.length > 5000 && data.photo.startsWith("data:") 
+              ? "" 
+              : data.photo,
+          };
 
-          localStorage.setItem("rentmate_current_username", usernameOnly);
-          localStorage.setItem("rentmate_current_user", JSON.stringify(data));
+          safeSetLocalStorage("rentmate_current_username", usernameOnly);
+          safeSetLocalStorage("rentmate_current_user", JSON.stringify(safeData));
         }
 
-        window.dispatchEvent(new CustomEvent("userUpdated"));
+        try {
+          window.dispatchEvent(new CustomEvent("userUpdated"));
+        } catch (dispatchErr) {
+          console.warn("userUpdated dispatch warning:", dispatchErr);
+        }
 
         toast({
           title: isLogin ? "Login Berhasil! 🎉" : "Pendaftaran Berhasil! 🎉",
@@ -191,10 +230,11 @@ export default function Login() {
         setTimeout(() => {
           navigate("/profile", { replace: true });
         }, 500);
-      } catch (err) {
+      } catch (err: any) {
+        console.error("Login process error:", err);
         toast({
           title: "Error",
-          description: "Terjadi kesalahan server.",
+          description: err?.message || "Terjadi kesalahan server.",
           variant: "destructive",
         });
       }
@@ -261,12 +301,14 @@ export default function Login() {
             )}
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Email</label>
+              <label className="text-sm font-medium">
+                {isLogin ? "Email atau Username" : "Email"}
+              </label>
               <div className="relative">
                 <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  type="email"
-                  placeholder="nama@email.com"
+                  type={isLogin ? "text" : "email"}
+                  placeholder={isLogin ? "nama@email.com atau username" : "nama@email.com"}
                   className="pl-11"
                   value={formData.email}
                   onChange={(e) =>
