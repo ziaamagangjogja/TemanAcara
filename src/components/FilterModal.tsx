@@ -187,13 +187,18 @@ export function FilterModal({ isOpen, onClose, filters, onApply }: FilterModalPr
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
-        <DialogHeader className="flex flex-row items-center justify-between">
-          <DialogTitle>Filter Pencarian</DialogTitle>
-          {getActiveFiltersCount() > 0 && (
-            <Badge variant="secondary" className="ml-2">
-              {getActiveFiltersCount()} filter aktif
-            </Badge>
-          )}
+        <DialogHeader className="flex flex-row items-center justify-between sticky top-0 bg-background z-10 pb-4 border-b">
+          <div className="flex items-center gap-2 mt-2">
+            <DialogTitle>Filter Pencarian</DialogTitle>
+            {getActiveFiltersCount() > 0 && (
+              <Badge variant="secondary">
+                {getActiveFiltersCount()} filter aktif
+              </Badge>
+            )}
+          </div>
+          <Button variant="ghost" size="sm" onClick={handleReset} className="h-8 text-primary">
+            Reset Semua
+          </Button>
         </DialogHeader>
 
         <div className="space-y-6 mt-4">
@@ -295,10 +300,7 @@ export function FilterModal({ isOpen, onClose, filters, onApply }: FilterModalPr
           </div>
         </div>
 
-        <div className="flex justify-between mt-6">
-          <Button variant="outline" onClick={handleReset}>
-            Reset
-          </Button>
+        <div className="flex justify-end mt-6 sticky bottom-0 bg-background py-4 border-t">
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>
               Batal

@@ -15,7 +15,16 @@ export interface TopUpRequest {
   adminNote?: string;
 }
 
+import { safeSetLocalStorage } from "./storageHelper";
+
 const LOCAL_KEY = "rentmate_topup_requests";
+
+function cleanTopUpForStorage(item: TopUpRequest): TopUpRequest {
+  if (item.proofImageBase64 && item.proofImageBase64.startsWith("data:") && item.proofImageBase64.length > 5000) {
+    return { ...item, proofImageBase64: "" };
+  }
+  return item;
+}
 
 // ============================================================
 // Helper: localStorage fallback
@@ -31,13 +40,14 @@ export function getTopUpFromLocalFallback(): TopUpRequest[] {
 function saveTopUpToLocal(request: TopUpRequest) {
   try {
     const existing = getTopUpFromLocalFallback();
+    const cleanReq = cleanTopUpForStorage(request);
     const idx = existing.findIndex(r => r.id === request.id);
     if (idx !== -1) {
-      existing[idx] = request;
+      existing[idx] = cleanReq;
     } else {
-      existing.unshift(request);
+      existing.unshift(cleanReq);
     }
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(existing.slice(0, 200)));
+    safeSetLocalStorage(LOCAL_KEY, JSON.stringify(existing.slice(0, 50)));
     window.dispatchEvent(new CustomEvent("topupRequestsUpdated"));
   } catch (e) {
     console.error("Gagal menyimpan top-up ke localStorage:", e);
@@ -52,7 +62,7 @@ function updateTopUpStatusInLocal(requestId: string, status: "approved" | "rejec
       existing[idx].status = status;
       existing[idx].processedAt = new Date().toISOString();
       if (adminNote) existing[idx].adminNote = adminNote;
-      localStorage.setItem(LOCAL_KEY, JSON.stringify(existing));
+      safeSetLocalStorage(LOCAL_KEY, JSON.stringify(existing.slice(0, 50)));
       window.dispatchEvent(new CustomEvent("topupRequestsUpdated"));
     }
   } catch (e) {

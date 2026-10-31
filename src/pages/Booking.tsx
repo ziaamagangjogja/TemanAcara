@@ -17,6 +17,9 @@ import {
   Upload,
   Star,
   Wallet,
+  AlertCircle,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -46,13 +49,16 @@ import {
   updateBookingRating,
   updateBooking,
   getCurrentUserOrMitra,
-  addNotificationForUser
+  addNotificationForUser,
+  getBookingTimeDetails,
+  getLatestStartTimeForDuration,
+  isTimeSlotExceedingOperatingHours,
 } from "@/lib/bookingStore";
 import { getCurrentUser, updateCurrentUser } from "@/lib/userStore";
 import { isTimeSlotBooked, isTimeSlotInPast } from '@/lib/bookingStore';
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 
-type BookingStatus = "draft" | "pending_payment" | "pending_approval" | "approved" | "completed" | "rejected";
+type BookingStatus = "draft" | "pending_payment" | "pending_approval" | "pending_mitra" | "approved" | "completed" | "rejected";
 
 const fileToBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -79,10 +85,46 @@ const offlineOnlyPurposes = [
   "Pesta / Party",
 ];
 
+const getLocalDateInputValue = () => {
+  const today = new Date();
+  return [today.getFullYear(), today.getMonth() + 1, today.getDate()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join("-");
+};
+
 
 const maskBankAccount = (accountNumber: string): string => {
   if (!accountNumber || accountNumber.length < 3) return accountNumber;
   return accountNumber;
+};
+
+const getTalentSkills = (talent: any): string[] => {
+  if (!talent) return [];
+  if (Array.isArray(talent.skills)) return talent.skills;
+  if (typeof talent.skills === "string") return talent.skills.split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean);
+  if (typeof talent.hobbies === "string") return talent.hobbies.split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean);
+  if (typeof talent.category === "string") return [talent.category];
+  return [];
+};
+
+const checkSkillMatch = (purpose: string, talentSkills: string[]): boolean => {
+  if (!talentSkills || talentSkills.length === 0) return true;
+  if (purpose === "Nongkrong / Ngobrol" || purpose === "Dinner / Makan Malam" || purpose === "Lainnya") {
+    return true; // Layanan dasar sosial platform yang universal
+  }
+  const p = purpose.toLowerCase();
+  return talentSkills.some(skill => {
+    const s = skill.toLowerCase();
+    if (s.includes("travel") || s.includes("hiking")) return p.includes("travel");
+    if (s.includes("foto") || s.includes("video") || s.includes("seni")) return p.includes("event") || p.includes("foto");
+    if (s.includes("olahraga") || s.includes("yoga") || s.includes("renang") || s.includes("basket") || s.includes("badminton") || s.includes("sepak bola")) return p.includes("olahraga");
+    if (s.includes("nonton")) return p.includes("nonton");
+    if (s.includes("belanja")) return p.includes("belanja");
+    if (s.includes("kerja") || s.includes("podcast") || s.includes("baca") || s.includes("networking")) return p.includes("kerja");
+    if (s.includes("musik") || s.includes("karaoke")) return p.includes("pesta") || p.includes("event");
+    if (s.includes("kuliner") || s.includes("kopi") || s.includes("masak")) return p.includes("dinner") || p.includes("nongkrong");
+    return p.includes(s) || s.includes(p);
+  });
 };
 
 export default function Booking() {
@@ -325,9 +367,16 @@ export default function Booking() {
         return false;
       }
 
-      // 2. Jangan resume jika sudah disetujui (approved), selesai (completed), atau ditolak (rejected)
+      // 2. Jangan resume pesanan yang sudah terminal atau menunggu refund.
       // karena user mungkin ingin membuat pesanan BARU.
-      if (b.approvalStatus === "approved" || b.approvalStatus === "completed" || b.approvalStatus === "rejected") {
+      if (
+        b.approvalStatus === "approved" ||
+        b.approvalStatus === "completed" ||
+        b.approvalStatus === "rejected" ||
+        b.approvalStatus === "expired" ||
+        b.paymentStatus === "refund_pending" ||
+        b.paymentStatus === "refunded"
+      ) {
         return false;
       }
 
@@ -385,6 +434,12 @@ export default function Booking() {
       return;
     }
 
+    if (existingBooking.approvalStatus === "pending_mitra") {
+      setBookingStatus("pending_mitra");
+      setStep(4);
+      return;
+    }
+
     // Jika statusnya approved, langsung ke step 5 (Chat)
     if (existingBooking.approvalStatus === "approved") {
       setBookingStatus("approved");
@@ -437,6 +492,15 @@ export default function Booking() {
         setPaymentCode(booking.paymentCode);
       }
 
+      if (booking.approvalStatus === "pending_mitra" && bookingStatus !== "pending_mitra") {
+        setBookingStatus("pending_mitra");
+        setStep(4);
+        toast({
+          title: "Pembayaran Diverifikasi",
+          description: "Pesanan diteruskan ke mitra dan menunggu persetujuannya.",
+        });
+      }
+
       // Pastikan status approved langsung ke step 5 (Chat)
       if (booking.approvalStatus === "approved" && bookingStatus !== "approved") {
         setBookingStatus("approved");
@@ -466,14 +530,14 @@ export default function Booking() {
     };
   }, [currentBookingId, bookingStatus, paymentCode, toast]);
 
-  // Tambahkan state untuk QRIS amount dengan 3 digit terakhir random
+  // State untuk QRIS amount sesuai total harga pemesanan
   const [qrisAmount, setQrisAmount] = useState<number>(0);
 
   // Update QRIS amount ketika displayTalent atau bookingData.duration berubah
   useEffect(() => {
     if (displayTalent && displayTalent.pricePerHour) {
       const totalPrice = displayTalent.pricePerHour * bookingData.duration;
-      setQrisAmount(getRandomizedAmount(totalPrice));
+      setQrisAmount(totalPrice);
     }
   }, [displayTalent, bookingData.duration]);
 
@@ -512,6 +576,28 @@ export default function Booking() {
     return null;
   }
 
+  // 🔥 CEGAH BOOKING DIRI SENDIRI: Periksa kesamaan ID, Email, atau Username
+  const activeUserSession = getCurrentUserOrMitra();
+  if (activeUserSession && talentForDisplay) {
+    const isSelf = 
+      (activeUserSession.data?.id && (talentForDisplay.id === activeUserSession.data.id || (talentForDisplay as any).talentId === activeUserSession.data.id)) ||
+      (activeUserSession.data?.email && talentForDisplay.email && activeUserSession.data.email.trim().toLowerCase() === talentForDisplay.email.trim().toLowerCase()) ||
+      (activeUserSession.data?.username && (
+        ((talentForDisplay as any).username && activeUserSession.data.username.trim().toLowerCase() === (talentForDisplay as any).username.trim().toLowerCase()) ||
+        (talentForDisplay.name && activeUserSession.data.username.trim().toLowerCase() === talentForDisplay.name.trim().toLowerCase())
+      ));
+
+    if (isSelf) {
+      toast({
+        title: "Pemesanan Tidak Diizinkan",
+        description: "Kamu tidak bisa memesan akun profil milikmu sendiri.",
+        variant: "destructive",
+      });
+      navigate("/talents");
+      return null;
+    }
+  }
+
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat("id-ID", {
       style: "currency",
@@ -522,7 +608,7 @@ export default function Booking() {
 
   // Gunakan talentForDisplay untuk perhitungan harga
   const totalPrice = talentForDisplay ? talentForDisplay.pricePerHour * bookingData.duration : 0;
-  const displayAmount = talentForDisplay ? getRandomizedAmount(totalPrice) : 0;
+  const displayAmount = totalPrice;
 
   // True jika saldo dompet user kurang dari total pembayaran.
   const saldoInsufficient = walletBalance < totalPrice;
@@ -540,6 +626,26 @@ export default function Booking() {
       }
       setIsMeetingLocationDialogOpen(true);
       return;
+    }
+    if (step === 2) {
+      if (!bookingData.time) {
+        toast({
+          title: "Waktu belum dipilih",
+          description: "Silakan pilih waktu mulai pemesanan terlebih dahulu.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)) {
+        const details = getBookingTimeDetails(bookingData.time, bookingData.duration);
+        const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+        toast({
+          title: "Waktu Tidak Mencukupi",
+          description: `Pemesanan ${bookingData.duration} jam mulai pukul ${bookingData.time} akan selesai pukul ${details.formattedEndTime} WIB (melebihi jam operasional mitra 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     if (step < 3) {
       setStep(step + 1);
@@ -575,14 +681,28 @@ const handlePayment = async () => {
     }
 
     if (isProcessing) return;
+
+    if (isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)) {
+      const details = getBookingTimeDetails(bookingData.time, bookingData.duration);
+      const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+      toast({
+        title: "Waktu Tidak Mencukupi",
+        description: `Pemesanan ${bookingData.duration} jam mulai pukul ${bookingData.time} akan selesai pukul ${details.formattedEndTime} WIB (melebihi jam operasional mitra 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsProcessing(true);
 
     // Validasi maksimal 5 pesanan aktif
     const myActiveBookings = getBookings().filter(b =>
-      b.userId === currentUser.id &&
+      b.userId === currentUser.data.id &&
       b.approvalStatus !== "rejected" &&
       b.approvalStatus !== "completed" &&
-      b.status !== "completed" &&
+      b.approvalStatus !== "expired" &&
+      b.paymentStatus !== "refund_pending" &&
+      b.paymentStatus !== "refunded" &&
       b.id !== currentBookingId
     );
 
@@ -688,12 +808,14 @@ const handlePayment = async () => {
       setStep(3);
     } catch (error: any) {
       console.error("Gagal lanjut ke pembayaran:", error);
-      // Jangan tampilkan toast error jika ternyata API mengembalikan "Failed to fetch" padahal data masuk.
-      // Cukup tampilkan error yang jelas dari Supabase, atau biarkan.
+      const errorMessage = error instanceof Error ? error.message : "";
+      const isNetworkError = /failed to fetch|network|fetch/i.test(errorMessage);
       toast({
-        title: "Peringatan",
-        description: "Ada kendala jaringan, namun pesanan mungkin berhasil. Silakan cek halaman Pemesanan Saya.",
-        variant: "default",
+        title: isNetworkError ? "Koneksi Bermasalah" : "Pemesanan Tidak Dapat Dilanjutkan",
+        description: isNetworkError
+          ? "Periksa koneksi lalu cek Pemesanan Saya sebelum mencoba lagi."
+          : errorMessage || "Silakan coba kembali beberapa saat lagi.",
+        variant: isNetworkError ? "default" : "destructive",
       });
     } finally {
       setIsProcessing(false);
@@ -796,7 +918,7 @@ const handleConfirmPayment = async () => {
       setStep(4);
 
       // Notifikasi untuk pemesan
-      addNotificationForUser(currentUser.id, {
+      addNotificationForUser(currentUser.data.id, {
         title: "Pembayaran Pemesanan Berhasil",
         message: `Pembayaran kamu untuk mitra ${talentForDisplay.name} sedang diverifikasi oleh admin.`,
         type: "payment"
@@ -807,7 +929,7 @@ const handleConfirmPayment = async () => {
       // hanya melihat perubahan dari kartu dashboard tanpa pemberitahuan baru.
       addNotificationForUser(currentBookingId ? getBookingById(currentBookingId)?.talentId || talentForDisplay.id : talentForDisplay.id, {
         title: "Permintaan Pemesanan Baru 📅",
-        message: `${currentUser.name || "Seorang pengguna"} mengirim pemesanan ${talentForDisplay.name} untuk "${getBookingById(currentBookingId || "")?.purpose || "layanan"}". Silakan cek dan berikan persetujuan.`,
+        message: `${currentUser.data.name || "Seorang pengguna"} mengirim pemesanan ${talentForDisplay.name} untuk "${getBookingById(currentBookingId || "")?.purpose || "layanan"}". Silakan cek dan berikan persetujuan.`,
         type: "booking"
       });
 
@@ -849,7 +971,11 @@ const handleConfirmPayment = async () => {
           return bookingData.duration > 0 && bookingData.purpose.trim().length > 0;
         }
       case 2:
-        return bookingData.date && bookingData.time;
+        return (
+          Boolean(bookingData.date) &&
+          Boolean(bookingData.time) &&
+          !isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)
+        );
       case 3:
         return true;
       default:
@@ -863,6 +989,8 @@ const handleConfirmPayment = async () => {
         return <Badge variant="warning">Menunggu Pembayaran</Badge>;
       case "pending_approval":
         return <Badge variant="accent">Menunggu Persetujuan Admin</Badge>;
+      case "pending_mitra":
+        return <Badge variant="accent">Menunggu Persetujuan Mitra</Badge>;
       case "approved":
         return <Badge variant="success">Disetujui</Badge>;
       case "completed":
@@ -988,25 +1116,62 @@ const handleConfirmPayment = async () => {
 
                   {/* Purpose */}
                   <div>
-                    <label className="text-sm font-medium mb-3 block">
-                      Tujuan Pemesanan
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium">
+                        Tujuan Pemesanan
+                      </label>
+                      <span className="text-xs text-muted-foreground">
+                        Sesuaikan dengan keahlian mitra
+                      </span>
+                    </div>
+
+                    {/* Banner Info Keahlian Talent */}
+                    {displayTalent && (
+                      <div className="mb-3 p-2.5 bg-orange-50/70 rounded-xl border border-orange-200/80 text-xs text-orange-950">
+                        <div className="flex items-center gap-1.5 font-semibold text-orange-900 mb-1">
+                          <Star className="w-3.5 h-3.5 text-orange-600 fill-orange-600 shrink-0" />
+                          <span>Keahlian & Layanan {displayTalent.name}:</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {getTalentSkills(displayTalent).length > 0 ? (
+                            getTalentSkills(displayTalent).map((skill) => (
+                              <Badge
+                                key={skill}
+                                variant="secondary"
+                                className="text-[10px] bg-white border border-orange-200 text-orange-800 font-medium"
+                              >
+                                {skill}
+                              </Badge>
+                            ))
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px] bg-white border border-orange-200 text-orange-800">
+                              Teman Acara & Kasual
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-2">
                       {bookingPurposes.map((purpose) => {
                         const isOfflineOnly = offlineOnlyPurposes.includes(purpose);
                         const isDisabled = bookingData.type === "online" && isOfflineOnly;
+                        const isMatched = checkSkillMatch(purpose, getTalentSkills(displayTalent));
+                        const isSelected =
+                          (bookingData.purpose === purpose && purpose !== "Lainnya") ||
+                          (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:"));
 
                         return (
                           <Button
                             key={purpose}
-                            variant={
-                              (bookingData.purpose === purpose && purpose !== "Lainnya") ||
-                              (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:"))
-                                ? "default" : "outline"
-                            }
+                            variant={isSelected ? "default" : "outline"}
                             size="sm"
                             disabled={isDisabled}
-                            className={cn("justify-start", isDisabled && "opacity-50 cursor-not-allowed bg-muted")}
+                            className={cn(
+                              "justify-start h-auto py-2 px-2.5 text-xs flex flex-col items-start gap-0.5",
+                              isDisabled && "opacity-50 cursor-not-allowed bg-muted",
+                              !isSelected && isMatched && purpose !== "Lainnya" && "border-orange-200/90 bg-orange-50/30 hover:bg-orange-50"
+                            )}
                             onClick={() => {
                               if (isDisabled) return;
                               if (purpose === "Lainnya") {
@@ -1017,11 +1182,31 @@ const handleConfirmPayment = async () => {
                               }
                             }}
                           >
-                            {purpose}
+                            <span className="font-medium truncate w-full text-left">{purpose}</span>
+                            {isMatched && purpose !== "Nongkrong / Ngobrol" && purpose !== "Dinner / Makan Malam" && purpose !== "Lainnya" && (
+                              <span className={cn(
+                                "text-[9px] px-1 py-0 rounded font-semibold",
+                                isSelected ? "text-orange-100 bg-orange-700/60" : "text-orange-600 bg-orange-100/80"
+                              )}>
+                                ★ Keahlian Mitra
+                              </span>
+                            )}
                           </Button>
                         );
                       })}
                     </div>
+
+                    {/* Notifikasi jika memilih di luar keahlian */}
+                    {bookingData.purpose &&
+                      bookingData.purpose !== "Lainnya:" &&
+                      !checkSkillMatch(bookingData.purpose, getTalentSkills(displayTalent)) && (
+                        <div className="mt-2.5 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
+                          <span className="text-sm shrink-0">💡</span>
+                          <span className="leading-tight">
+                            <strong>Catatan:</strong> "{bookingData.purpose}" di luar spesialisasi utama {displayTalent?.name || "mitra"}. Anda tetap bisa melanjutkan, namun pastikan untuk mendiskusikan kesiapan acara melalui chat.
+                          </span>
+                        </div>
+                      )}
 
                     {/* Tampilkan input teks jika "Lainnya" dipilih */}
                     {bookingData.purpose.startsWith("Lainnya:") && (
@@ -1109,6 +1294,18 @@ const handleConfirmPayment = async () => {
                 <div className="space-y-6 animate-fade-in">
                   <h2 className="text-xl font-bold">Jadwal & Waktu</h2>
 
+                  {/* Operational Hours Informational Banner */}
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/70 dark:border-blue-900/50 dark:bg-blue-950/30 p-3.5 text-xs text-blue-900 dark:text-blue-200 flex items-start gap-3">
+                    <Info className="w-4 h-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
+                    <div className="space-y-1">
+                      <p className="font-semibold text-sm">Ketentuan Jam Operasional (08:00 – 22:00 WIB)</p>
+                      <p className="leading-relaxed">
+                        Layanan mitra beroperasi mulai pukul <strong className="font-semibold">08:00 WIB</strong> hingga maksimal selesai pukul <strong className="font-semibold">22:00 WIB</strong>.
+                        Untuk durasi <strong className="font-semibold">{bookingData.duration} jam</strong>, batas waktu mulai maksimal adalah pukul <strong className="font-semibold underline text-primary">{getLatestStartTimeForDuration(bookingData.duration)} WIB</strong> agar layanan selesai tepat waktu sebelum jam operasional berakhir.
+                      </p>
+                    </div>
+                  </div>
+
                   {/* DATE + TIME SIDE BY SIDE */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* TANGGAL */}
@@ -1129,16 +1326,21 @@ const handleConfirmPayment = async () => {
                               time: "", // reset waktu saat tanggal berubah
                             });
                           }}
-                          min={new Date().toISOString().split("T")[0]}
+                          min={getLocalDateInputValue()}
                         />
                       </div>
                     </div>
 
                     {/* WAKTU */}
                     <div>
-                      <label className="text-sm font-medium mb-2 block">
-                        Waktu Mulai
-                      </label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium block">
+                          Waktu Mulai
+                        </label>
+                        <span className="text-xs text-muted-foreground">
+                          Maks. mulai: <strong className="text-primary">{getLatestStartTimeForDuration(bookingData.duration)} WIB</strong>
+                        </span>
+                      </div>
 
                       {!bookingData.date ? (
                         <div className="h-10 rounded-xl border-2 border-dashed flex items-center justify-center text-xs text-muted-foreground">
@@ -1158,22 +1360,46 @@ const handleConfirmPayment = async () => {
                             const [hour] = time.split(":").map(Number);
                             const isOutsideWorkingHours = hour < 8 || hour >= 22;
                             const isPast = isTimeSlotInPast(bookingData.date, time);
-                            const isUnavailable = isBooked || isOutsideWorkingHours || isPast;
+                            const timeDetails = getBookingTimeDetails(time, bookingData.duration);
+                            const isExceeding = timeDetails.exceedsOperational;
+                            const isUnavailable = isBooked || isOutsideWorkingHours || isPast || isExceeding;
+                            const latestStart = getLatestStartTimeForDuration(bookingData.duration);
 
                             return (
                               <Button
                                 key={time}
+                                type="button"
                                 variant={bookingData.time === time ? "default" : "outline"}
                                 size="sm"
-                                className={cn(
-                                  "text-xs",
-                                  isUnavailable &&
-                                    "opacity-50 cursor-not-allowed bg-muted text-muted-foreground"
-                                )}
-                                disabled={isUnavailable}
-                                onClick={() =>
-                                  setBookingData({ ...bookingData, time })
+                                title={
+                                  isExceeding
+                                    ? `Waktu tidak mencukupi: Pemesanan ${bookingData.duration} jam akan selesai pukul ${timeDetails.formattedEndTime} WIB (melebihi jam operasional 22:00 WIB)`
+                                    : isBooked
+                                    ? "Sudah dipesan"
+                                    : isPast
+                                    ? "Waktu sudah lewat"
+                                    : `Selesai pukul ${timeDetails.formattedEndTime} WIB`
                                 }
+                                className={cn(
+                                  "text-xs relative transition-all",
+                                  (isBooked || isPast || isOutsideWorkingHours) &&
+                                    "opacity-50 cursor-not-allowed bg-muted text-muted-foreground",
+                                  isExceeding && !isBooked && !isPast &&
+                                    "opacity-60 bg-amber-50/80 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-900/50 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 line-through decoration-amber-500/70"
+                                )}
+                                disabled={isBooked || isPast || isOutsideWorkingHours}
+                                onClick={() => {
+                                  if (isExceeding) {
+                                    toast({
+                                      title: "Waktu Tidak Mencukupi",
+                                      description: `Pemesanan ${bookingData.duration} jam mulai pukul ${time} akan selesai pukul ${timeDetails.formattedEndTime} WIB (melebihi jam operasional 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
+                                  if (isUnavailable) return;
+                                  setBookingData({ ...bookingData, time });
+                                }}
                               >
                                 {time}
                               </Button>
@@ -1184,9 +1410,59 @@ const handleConfirmPayment = async () => {
                     </div>
                   </div>
 
-                  <p className="text-xs text-muted-foreground">
-                    Jam yang dinonaktifkan sudah dipesan atau di luar jam operasional (08.00–22.00).
-                  </p>
+                  {/* Keterangan Status / Alert Waktu Terpilih */}
+                  {bookingData.time && (() => {
+                    const selectedDetails = getBookingTimeDetails(bookingData.time, bookingData.duration);
+                    const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+
+                    if (selectedDetails.exceedsOperational) {
+                      return (
+                        <div className="rounded-xl border border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-3.5 text-xs text-red-800 dark:text-red-300 flex items-start gap-2.5">
+                          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-600 dark:text-red-400" />
+                          <div>
+                            <p className="font-bold text-sm">Waktu Pemesanan Melebihi Jam Operasional!</p>
+                            <p className="mt-1 leading-relaxed">
+                              Pemesanan mulai pukul <strong className="font-semibold">{bookingData.time} WIB</strong> selama <strong className="font-semibold">{bookingData.duration} jam</strong> akan selesai pada pukul <strong className="font-semibold">{selectedDetails.formattedEndTime} WIB</strong>. Jam operasional mitra hanya sampai pukul 22:00 WIB. Silakan pilih jam mulai sebelum atau tepat pukul <strong className="font-bold underline">{latestStart} WIB</strong>.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="rounded-xl border border-emerald-300 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/40 p-3 text-xs text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span>
+                            Estimasi Waktu: <strong className="font-bold">{bookingData.time} – {selectedDetails.formattedEndTime} WIB</strong> ({bookingData.duration} jam)
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/60 dark:text-emerald-200 text-[10px]">
+                          ✓ Sesuai Jam Operasional
+                        </Badge>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-1">
+                    <span className="font-medium">Keterangan:</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded border bg-background inline-block"></span>
+                      <span>Tersedia</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded bg-primary inline-block"></span>
+                      <span>Dipilih</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded bg-muted opacity-50 inline-block"></span>
+                      <span>Sudah Dipesan / Lewat</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/40 inline-block"></span>
+                      <span>Waktu Tidak Cukup (&gt;22:00)</span>
+                    </div>
+                  </div>
 
                   {/* CATATAN */}
                   <div>
@@ -1230,13 +1506,16 @@ const handleConfirmPayment = async () => {
                     </div>
                     <div className="flex justify-between py-3 border-b">
                       <span className="text-muted-foreground">Tanggal & Waktu</span>
-                      <span className="font-medium">
+                      <span className="font-medium text-right">
                         {bookingData.date && new Date(bookingData.date).toLocaleDateString("id-ID", {
                           weekday: "long",
                           day: "numeric",
                           month: "long",
-                        })}{" "}
-                        - {bookingData.time}
+                        })}
+                        <br />
+                        <span className="text-sm text-primary font-semibold">
+                          {bookingData.time} – {getBookingTimeDetails(bookingData.time, bookingData.duration).formattedEndTime} WIB ({bookingData.duration} jam)
+                        </span>
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b">
@@ -1607,7 +1886,7 @@ const handleConfirmPayment = async () => {
                 </div>
               )}
 
-              {(bookingStatus === "pending_approval" || bookingStatus === "rejected") && (
+              {(bookingStatus === "pending_approval" || bookingStatus === "pending_mitra" || bookingStatus === "rejected") && (
                 <div className="py-8 text-center animate-fade-in">
                   <div className={cn(
                     "w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4",
@@ -1622,12 +1901,18 @@ const handleConfirmPayment = async () => {
                     )}
                   </div>
                   <h2 className="text-xl font-bold mb-2">
-                    {bookingStatus === "rejected" ? "Pemesanan Ditolak" : "Menunggu Persetujuan Admin"}
+                    {bookingStatus === "rejected"
+                      ? "Pemesanan Ditolak"
+                      : bookingStatus === "pending_mitra"
+                        ? "Menunggu Persetujuan Mitra"
+                        : "Menunggu Persetujuan Admin"}
                   </h2>
                   <p className="text-muted-foreground mb-6 max-w-md mx-auto">
                     {bookingStatus === "rejected"
                       ? "Maaf, admin menolak pemesanan Anda. Silakan hubungi admin untuk informasi lebih lanjut."
-                      : "⏳ Menunggu verifikasi pembayaran oleh admin"}
+                      : bookingStatus === "pending_mitra"
+                        ? "Pembayaran sudah diverifikasi admin. Mitra sedang diminta menyetujui jadwal ini."
+                        : "Menunggu verifikasi pembayaran oleh admin."}
                   </p>
 
                   <Card className="p-4 bg-muted/50 max-w-sm mx-auto mb-6">
@@ -1648,14 +1933,18 @@ const handleConfirmPayment = async () => {
                     </div>
                   </Card>
 
-                  {bookingStatus === "pending_approval" && (
+                  {(bookingStatus === "pending_approval" || bookingStatus === "pending_mitra") && (
                     <div className="border-t pt-6">
                       <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg p-4">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Menunggu admin menyetujui pemesanan...</span>
+                        <span>
+                          {bookingStatus === "pending_mitra"
+                            ? "Menunggu mitra menyetujui pemesanan..."
+                            : "Menunggu admin memverifikasi pemesanan..."}
+                        </span>
                       </div>
                       <p className="text-xs text-center text-muted-foreground mt-3">
-                        Kamu akan menerima notifikasi setelah pemesanan disetujui
+                        Kamu akan menerima notifikasi saat status pemesanan berubah.
                       </p>
                     </div>
                   )}

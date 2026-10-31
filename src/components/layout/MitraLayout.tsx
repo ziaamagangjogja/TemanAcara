@@ -4,12 +4,14 @@ import { useAppSettings } from "@/contexts/AppSettingsContext";
 import { getCurrentMitra } from "@/lib/mitraStore";
 import { Button } from "@/components/ui/button";
 
+import { safeGetLocalStorage } from "@/lib/storageHelper";
+
 // Cek sesi mitra yang sudah login tanpa efek samping
 function hasActiveMitraSession(): boolean {
   try {
     return (
-      localStorage.getItem("mitraAuthenticated") === "true" &&
-      !!localStorage.getItem("rentmate_current_mitra")
+      safeGetLocalStorage("mitraAuthenticated") === "true" &&
+      !!safeGetLocalStorage("rentmate_current_mitra")
     );
   } catch {
     return false;
@@ -32,6 +34,7 @@ const NO_DASHBOARD_NAVBAR_PATHS = [
   "/mitra/help",
   // Halaman berikut punya navbar/header sendiri yang lengkap
   "/mitra/dashboard",
+  "/mitra/verification",
 ];
 
 // Halaman publik (landing) yang tampilkan LandingNavbar
@@ -108,16 +111,25 @@ function LandingNavbar() {
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
-            {/* Jika mitra sudah login, beri pintasan langsung ke dashboard */}
+            {/* Jika mitra sudah login, beri pintasan ke dashboard atau status verifikasi */}
             {isMitraLoggedIn && (
               <Button
                 variant="default"
                 size="sm"
                 className="gap-2"
-                onClick={() => navigate("/mitra/dashboard")}
+                onClick={() => {
+                  const m = getCurrentMitra();
+                  if (m?.verificationStatus === 'pending' || m?.verificationStatus === 'rejected' || (m?.verificationStatus === 'approved' && !m?.isLegacyTalent && !m?.price_accepted)) {
+                    navigate("/mitra/verification");
+                  } else {
+                    navigate("/mitra/dashboard");
+                  }
+                }}
               >
                 <LayoutDashboard className="w-4 h-4" />
-                <span className="hidden sm:inline">Dashboard Mitra</span>
+                <span className="hidden sm:inline">
+                  {getCurrentMitra()?.verificationStatus === 'pending' ? 'Status Pengajuan' : 'Dashboard Mitra'}
+                </span>
               </Button>
             )}
 

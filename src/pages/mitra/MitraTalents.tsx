@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getAllVerifiedTalents, getCurrentMitra } from "@/lib/mitraStore";
+import { getTalentReviewStats } from "@/lib/bookingStore";
 
 // Import FilterModal secara langsung untuk menghindari error lazy loading
 import { FilterModal } from "@/components/FilterModal";
@@ -329,7 +330,15 @@ export default function MitraTalents() {
     
     switch (sortBy) {
       case "rating":
-        sortedTalents.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+        sortedTalents.sort((a, b) => {
+          const rateA = getTalentReviewStats(a).rating;
+          const rateB = getTalentReviewStats(b).rating;
+          if (rateB !== rateA) return rateB - rateA;
+          const revA = getTalentReviewStats(a).reviewCount;
+          const revB = getTalentReviewStats(b).reviewCount;
+          if (revB !== revA) return revB - revA;
+          return (a.name || "").localeCompare(b.name || "");
+        });
         break;
       case "price-low":
         sortedTalents.sort((a, b) => (a.price || 0) - (b.price || 0));
@@ -338,7 +347,15 @@ export default function MitraTalents() {
         sortedTalents.sort((a, b) => (b.price || 0) - (a.price || 0));
         break;
       case "reviews":
-        sortedTalents.sort((a, b) => (b.reviewCount || 0) - (a.reviewCount || 0));
+        sortedTalents.sort((a, b) => {
+          const revA = getTalentReviewStats(a).reviewCount;
+          const revB = getTalentReviewStats(b).reviewCount;
+          if (revB !== revA) return revB - revA;
+          const rateA = getTalentReviewStats(a).rating;
+          const rateB = getTalentReviewStats(b).rating;
+          if (rateB !== rateA) return rateB - rateA;
+          return (a.name || "").localeCompare(b.name || "");
+        });
         break;
     }
     

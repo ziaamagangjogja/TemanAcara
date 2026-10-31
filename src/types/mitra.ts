@@ -18,7 +18,11 @@ export interface MitraAccount {
   description?: string;
   category?: string;
   price?: number;
-  photo?: string;
+  experience_level?: string; // "pemula" | "menengah" | "mahir"
+  price_expectation?: string; // "35k-50k" | "50k-85k" | "85k-130k" | ">130k"
+  social_media?: string; // Instagram / LinkedIn
+  rejection_reason?: string;
+  pricing_tier?: string;
   verificationDocuments?: {
     ktp?: string | null;
     kk?: string | null;
@@ -49,6 +53,9 @@ export interface MitraRegistrationData {
   photo?: string;
   ktp?: string;
   hobbies?: string;
+  experience_level?: string;
+  price_expectation?: string;
+  social_media?: string;
 }
 
 // ================= LOGIN =================

@@ -17,6 +17,9 @@ import {
   Building2,
   Upload,
   Star,
+  AlertCircle,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,6 +39,9 @@ import {
   getCurrentUserOrMitra,
   updateBooking, // PERBAIKAN: Tambahkan import ini
   refreshBookingsFromSupabase, // PERBAIKAN: agar jadwal ter-booking akurat
+  getBookingTimeDetails,
+  getLatestStartTimeForDuration,
+  isTimeSlotExceedingOperatingHours,
 } from "@/lib/bookingStore";
 import { getCurrentUser } from "@/lib/userStore";
 
@@ -217,24 +223,49 @@ const TimeSlotButton = memo(({
   isSelected,
   isBooked,
   isOutsideWorkingHours,
-  onClick
+  isExceeding,
+  formattedEndTime,
+  onClick,
+  onExceedingClick,
 }: {
   time: string;
   isSelected: boolean;
   isBooked: boolean;
   isOutsideWorkingHours: boolean;
+  isExceeding?: boolean;
+  formattedEndTime?: string;
   onClick: () => void;
+  onExceedingClick?: () => void;
 }) => (
   <Button
+    type="button"
     variant={isSelected ? "default" : "outline"}
     size="sm"
+    title={
+      isExceeding
+        ? `Waktu tidak mencukupi: Selesai pukul ${formattedEndTime} WIB (melebihi jam operasional 22:00 WIB)`
+        : isBooked
+        ? "Sudah dipesan"
+        : isOutsideWorkingHours
+        ? "Waktu di luar jam operasional"
+        : `Selesai pukul ${formattedEndTime} WIB`
+    }
     className={cn(
-      "text-xs",
+      "text-xs relative transition-all",
       (isBooked || isOutsideWorkingHours) &&
         "opacity-50 cursor-not-allowed bg-muted text-muted-foreground",
+      isExceeding && !isBooked && !isOutsideWorkingHours &&
+        "opacity-60 bg-amber-50/80 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-900/50 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 line-through decoration-amber-500/70"
     )}
     disabled={isBooked || isOutsideWorkingHours}
-    onClick={onClick}
+    onClick={() => {
+      if (isExceeding && onExceedingClick) {
+        onExceedingClick();
+        return;
+      }
+      if (isBooked || isOutsideWorkingHours) return;
+      onClick();
+    }}
   >
     {time}
   </Button>
@@ -653,25 +684,37 @@ export default function MitraBooking() {
     return talentForDisplay?.pricePerHour * bookingData.duration || 0;
   }, [talentForDisplay?.pricePerHour, bookingData.duration]);
 
-  const displayAmount = useMemo(() => {
-    return getRandomizedAmount(totalPrice);
-  }, [totalPrice]);
+  const displayAmount = totalPrice;
 
-  const qrisAmount = useMemo(() => {
-    if (displayTalent) {
-      const totalPrice = displayTalent.pricePerHour * bookingData.duration;
-      return getRandomizedAmount(totalPrice);
-    }
-    return 0;
-  }, [displayTalent, bookingData.duration]);
+  const qrisAmount = totalPrice;
 
   // Memoized event handlers
   const handleNext = useCallback(() => {
     if (bookingStatus !== "draft") return;
+    if (step === 2) {
+      if (!bookingData.time) {
+        toast({
+          title: "Waktu belum dipilih",
+          description: "Silakan pilih waktu mulai pemesanan terlebih dahulu.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)) {
+        const details = getBookingTimeDetails(bookingData.time, bookingData.duration);
+        const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+        toast({
+          title: "Waktu Tidak Mencukupi",
+          description: `Pemesanan ${bookingData.duration} jam mulai pukul ${bookingData.time} akan selesai pukul ${details.formattedEndTime} WIB (melebihi jam operasional 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     if (step < 3) {
       setStep(step + 1);
     }
-  }, [bookingStatus, step]);
+  }, [bookingStatus, step, bookingData.time, bookingData.duration, toast]);
 
   const handleBack = useCallback(() => {
     if (bookingStatus !== "draft") return;
@@ -686,6 +729,17 @@ export default function MitraBooking() {
       toast({
         title: "Error",
         description: "Anda harus login untuk melakukan pemesanan",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)) {
+      const details = getBookingTimeDetails(bookingData.time, bookingData.duration);
+      const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+      toast({
+        title: "Waktu Tidak Mencukupi",
+        description: `Pemesanan ${bookingData.duration} jam mulai pukul ${bookingData.time} akan selesai pukul ${details.formattedEndTime} WIB (melebihi jam operasional 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
         variant: "destructive",
       });
       return;
@@ -896,7 +950,11 @@ export default function MitraBooking() {
           return bookingData.duration > 0 && bookingData.purpose.trim().length > 0;
         }
       case 2:
-        return bookingData.date && bookingData.time;
+        return (
+          Boolean(bookingData.date) &&
+          Boolean(bookingData.time) &&
+          !isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)
+        );
       case 3:
         return true;
       default:
@@ -979,6 +1037,8 @@ export default function MitraBooking() {
         ? session.data.talentId || session.data.id
         : session?.data?.id || "";
 
+    const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+
     return TIME_SLOTS.map((time) => {
       const isBooked = isTimeSlotBooked(
         id!,
@@ -1001,6 +1061,8 @@ export default function MitraBooking() {
 
       const [hour] = time.split(":").map(Number);
       const isOutsideWorkingHours = hour < 8 || hour >= 22;
+      const timeDetails = getBookingTimeDetails(time, bookingData.duration);
+      const isExceeding = timeDetails.exceedsOperational;
 
       return (
         <TimeSlotButton
@@ -1009,11 +1071,20 @@ export default function MitraBooking() {
           isSelected={bookingData.time === time}
           isBooked={isBooked || isBookerBusySlot}
           isOutsideWorkingHours={isOutsideWorkingHours || isPast}
+          isExceeding={isExceeding}
+          formattedEndTime={timeDetails.formattedEndTime}
           onClick={() => setBookingData((prev) => ({ ...prev, time }))}
+          onExceedingClick={() => {
+            toast({
+              title: "Waktu Tidak Mencukupi",
+              description: `Pemesanan ${bookingData.duration} jam mulai pukul ${time} akan selesai pukul ${timeDetails.formattedEndTime} WIB (melebihi jam operasional 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
+              variant: "destructive",
+            });
+          }}
         />
       );
     });
-  }, [bookingData.date, bookingData.time, bookingData.duration, id, nowTick]);
+  }, [bookingData.date, bookingData.time, bookingData.duration, id, nowTick, toast]);
 
   const paymentMethodCards = useMemo(() => {
     const methods = [
@@ -1253,6 +1324,18 @@ export default function MitraBooking() {
                 <div className="space-y-6 animate-fade-in">
                   <h2 className="text-xl font-bold">Jadwal & Waktu</h2>
 
+                  {/* Operational Hours Informational Banner */}
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/70 dark:border-blue-900/50 dark:bg-blue-950/30 p-3.5 text-xs text-blue-900 dark:text-blue-200 flex items-start gap-3">
+                    <Info className="w-4 h-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
+                    <div className="space-y-1">
+                      <p className="font-semibold text-sm">Ketentuan Jam Operasional (08:00 – 22:00 WIB)</p>
+                      <p className="leading-relaxed">
+                        Layanan mitra beroperasi mulai pukul <strong className="font-semibold">08:00 WIB</strong> hingga maksimal selesai pukul <strong className="font-semibold">22:00 WIB</strong>.
+                        Untuk durasi <strong className="font-semibold">{bookingData.duration} jam</strong>, batas waktu mulai maksimal adalah pukul <strong className="font-semibold underline text-primary">{getLatestStartTimeForDuration(bookingData.duration)} WIB</strong> agar layanan selesai tepat waktu sebelum jam operasional berakhir.
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <label className="text-sm font-medium mb-2 block">
@@ -1271,9 +1354,14 @@ export default function MitraBooking() {
                     </div>
 
                     <div>
-                      <label className="text-sm font-medium mb-2 block">
-                        Waktu Mulai
-                      </label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium block">
+                          Waktu Mulai
+                        </label>
+                        <span className="text-xs text-muted-foreground">
+                          Maks. mulai: <strong className="text-primary">{getLatestStartTimeForDuration(bookingData.duration)} WIB</strong>
+                        </span>
+                      </div>
 
                       {!bookingData.date ? (
                         <div className="h-10 rounded-xl border-2 border-dashed flex items-center justify-center text-xs text-muted-foreground">
@@ -1287,9 +1375,59 @@ export default function MitraBooking() {
                     </div>
                   </div>
 
-                  <p className="text-xs text-muted-foreground">
-                    Jam yang dinonaktifkan sudah dipesan atau di luar jam operasional (08.00–22.00).
-                  </p>
+                  {/* Keterangan Status / Alert Waktu Terpilih */}
+                  {bookingData.time && (() => {
+                    const selectedDetails = getBookingTimeDetails(bookingData.time, bookingData.duration);
+                    const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+
+                    if (selectedDetails.exceedsOperational) {
+                      return (
+                        <div className="rounded-xl border border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-3.5 text-xs text-red-800 dark:text-red-300 flex items-start gap-2.5">
+                          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-600 dark:text-red-400" />
+                          <div>
+                            <p className="font-bold text-sm">Waktu Pemesanan Melebihi Jam Operasional!</p>
+                            <p className="mt-1 leading-relaxed">
+                              Pemesanan mulai pukul <strong className="font-semibold">{bookingData.time} WIB</strong> selama <strong className="font-semibold">{bookingData.duration} jam</strong> akan selesai pada pukul <strong className="font-semibold">{selectedDetails.formattedEndTime} WIB</strong>. Jam operasional mitra hanya sampai pukul 22:00 WIB. Silakan pilih jam mulai sebelum atau tepat pukul <strong className="font-bold underline">{latestStart} WIB</strong>.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="rounded-xl border border-emerald-300 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/40 p-3 text-xs text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span>
+                            Estimasi Waktu: <strong className="font-bold">{bookingData.time} – {selectedDetails.formattedEndTime} WIB</strong> ({bookingData.duration} jam)
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/60 dark:text-emerald-200 text-[10px]">
+                          ✓ Sesuai Jam Operasional
+                        </Badge>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-1">
+                    <span className="font-medium">Keterangan:</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded border bg-background inline-block"></span>
+                      <span>Tersedia</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded bg-primary inline-block"></span>
+                      <span>Dipilih</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded bg-muted opacity-50 inline-block"></span>
+                      <span>Sudah Dipesan / Lewat</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/40 inline-block"></span>
+                      <span>Waktu Tidak Cukup (&gt;22:00)</span>
+                    </div>
+                  </div>
 
                   <div>
                     <label className="text-sm font-medium mb-2 block">
@@ -1328,13 +1466,16 @@ export default function MitraBooking() {
                     </div>
                     <div className="flex justify-between py-3 border-b">
                       <span className="text-muted-foreground">Tanggal & Waktu</span>
-                      <span className="font-medium">
+                      <span className="font-medium text-right">
                         {bookingData.date && new Date(bookingData.date).toLocaleDateString("id-ID", {
                           weekday: "long",
                           day: "numeric",
                           month: "long",
-                        })}{" "}
-                        - {bookingData.time}
+                        })}
+                        <br />
+                        <span className="text-sm text-primary font-semibold">
+                          {bookingData.time} – {getBookingTimeDetails(bookingData.time, bookingData.duration).formattedEndTime} WIB ({bookingData.duration} jam)
+                        </span>
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b">

@@ -22,6 +22,10 @@ import {
   RefreshCw,
   HeartHandshake,
   AlertTriangle,
+  AlertCircle,
+  ArrowUpRight,
+  PlusCircle,
+  QrCode,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,8 +33,11 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { RatingModal } from "@/components/RatingModal";
+import { SubmitComplaintModal } from "@/components/SubmitComplaintModal";
+import { WithdrawalModal } from "@/components/WithdrawalModal";
 import { talents } from "@/data/mockData";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import { useToast } from "@/hooks/use-toast";
@@ -46,8 +53,10 @@ import { getBookings, refreshBookingsFromSupabase, updateBookingRating } from "@
 import { dicebearAvatar, initialsAvatar } from "@/lib/utils";
 import { compressImageFile } from "@/utils/imageCompressor";
 import { createTopUpRequest, getUserTopUpRequests, TopUpRequest } from "@/lib/topupStore";
+import { getUserWithdrawalRequests, WithdrawalRequest } from "@/lib/withdrawalStore";
 
 const TOP_UP_OPTIONS = [50000, 100000, 200000, 500000, 1000000];
+
 
 export default function Profile() {
   const { toast } = useToast();
@@ -64,6 +73,7 @@ export default function Profile() {
   const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
+  const [isWithdrawalOpen, setIsWithdrawalOpen] = useState(false);
   // Multi-step top-up state
   const [topUpStep, setTopUpStep] = useState<1 | 2 | 3>(1);
   const [topUpAmount, setTopUpAmount] = useState<number | null>(null);
@@ -72,6 +82,7 @@ export default function Profile() {
   const [topUpProofPreview, setTopUpProofPreview] = useState<string | null>(null);
   const [isSubmittingTopUp, setIsSubmittingTopUp] = useState(false);
   const [myTopUpRequests, setMyTopUpRequests] = useState<TopUpRequest[]>([]);
+  const [myWithdrawalRequests, setMyWithdrawalRequests] = useState<WithdrawalRequest[]>([]);
 
   const [showTransactionDialog, setShowTransactionDialog] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
@@ -83,6 +94,10 @@ export default function Profile() {
   const [isLoadingBookings, setIsLoadingBookings] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<"all" | "booking" | "saldo" | "withdrawal">("all");
+  const [historyTimeFilter, setHistoryTimeFilter] = useState<"newest" | "oldest">("newest");
+
 
   // Daftar talent dari database (mitra asli), digabung dengan data dummy.
   // Ini penting agar booking ke mitra asli (mis. Yasmin) tetap tampil.
@@ -110,9 +125,10 @@ export default function Profile() {
     isOpen: boolean;
     bookingId: string;
     talentName: string;
+    talentPhoto?: string;
+    bookingDate?: string;
+    bookingPurpose?: string;
   }>({ isOpen: false, bookingId: "", talentName: "" });
-  const [complaintText, setComplaintText] = useState("");
-  const [isSubmittingComplaint, setIsSubmittingComplaint] = useState(false);
 
   const notifications = useMemo(() => userData?.notifications || [], [userData?.notifications]);
 
@@ -133,6 +149,21 @@ export default function Profile() {
       setIsLoadingUser(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "notifications") return;
+
+    const refreshNotifications = () => {
+      if (document.visibilityState === "visible") void loadUserData();
+    };
+    const interval = window.setInterval(refreshNotifications, 7000);
+    window.addEventListener("focus", refreshNotifications);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshNotifications);
+    };
+  }, [activeTab, loadUserData]);
 
   const loadUserBookings = useCallback(async () => {
     setIsLoadingBookings(true);
@@ -200,11 +231,12 @@ export default function Profile() {
       }
     } catch {}
 
-    // Muat riwayat top-up milik user
+    // Muat riwayat top-up & penarikan saldo milik user
     loadUserData().then(async () => {
       const user = await import("@/lib/userStore").then(m => m.getCurrentUser());
       if (user) {
         getUserTopUpRequests(user.id).then(reqs => setMyTopUpRequests(reqs));
+        getUserWithdrawalRequests(user.id).then(reqs => setMyWithdrawalRequests(reqs));
       }
     });
   }, [loadUserData, loadUserBookings, refreshTrigger]);
@@ -225,18 +257,20 @@ export default function Profile() {
     };
   }, [loadUserBookings]);
 
-  // Re-load top-up requests when list changes (e.g. after admin approves)
+  // Re-load top-up & withdrawal requests when list changes
   useEffect(() => {
-    const handleTopUpUpdate = async () => {
+    const handleFinancialUpdate = async () => {
       const user = await import("@/lib/userStore").then(m => m.getCurrentUser());
       if (user) {
         getUserTopUpRequests(user.id).then(reqs => setMyTopUpRequests(reqs));
+        getUserWithdrawalRequests(user.id).then(reqs => setMyWithdrawalRequests(reqs));
         // Reload user data to reflect wallet changes
         loadUserData();
       }
     };
-    window.addEventListener("topupRequestsUpdated", handleTopUpUpdate);
-    window.addEventListener("userUpdated", handleTopUpUpdate);
+    window.addEventListener("topupRequestsUpdated", handleFinancialUpdate);
+    window.addEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
+    window.addEventListener("userUpdated", handleFinancialUpdate);
     
     // Listen for notification updates
     const handleNotificationsUpdate = () => {
@@ -246,20 +280,27 @@ export default function Profile() {
     
     // Cross-tab sync for localStorage
     const handleStorageEvent = (e: StorageEvent) => {
-      if (e.key === "rentmate_topup_requests" || e.key?.startsWith("rentmate_notifications_") || e.key === "rentmate_current_username") {
-        handleTopUpUpdate();
+      if (
+        e.key === "rentmate_topup_requests" ||
+        e.key === "rentmate_withdrawal_requests" ||
+        e.key?.startsWith("rentmate_notifications_") ||
+        e.key === "rentmate_current_username"
+      ) {
+        handleFinancialUpdate();
         loadUserData();
       }
     };
     window.addEventListener("storage", handleStorageEvent);
 
     return () => {
-      window.removeEventListener("topupRequestsUpdated", handleTopUpUpdate);
-      window.removeEventListener("userUpdated", handleTopUpUpdate);
+      window.removeEventListener("topupRequestsUpdated", handleFinancialUpdate);
+      window.removeEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
+      window.removeEventListener("userUpdated", handleFinancialUpdate);
       window.removeEventListener("notificationsUpdated", handleNotificationsUpdate);
       window.removeEventListener("storage", handleStorageEvent);
     };
   }, [loadUserData]);
+
 
   const handleTopUpProofUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -374,45 +415,6 @@ export default function Profile() {
     }
   };
 
-  const handleSubmitComplaint = async () => {
-    if (!complaintText.trim() || !userData) return;
-    setIsSubmittingComplaint(true);
-    try {
-      const response = await fetch("/api/complaints", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: userData.id,
-          bookingId: complaintModal.bookingId,
-          talentName: complaintModal.talentName,
-          description: complaintText.trim(),
-        }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(result.message || "Komplain gagal disimpan ke database.");
-      }
-
-      const report = result.report;
-      window.dispatchEvent(new CustomEvent("newReport", { detail: { report } }));
-      localStorage.setItem("rentmate_complaints_updated", report.id);
-      toast({
-        title: "Komplain Berhasil Dikirim",
-        description: "Komplain Anda tersimpan dan sudah masuk ke daftar Laporan Admin.",
-      });
-      setComplaintModal({ isOpen: false, bookingId: "", talentName: "" });
-      setComplaintText("");
-    } catch (error) {
-      console.error("Gagal menyimpan komplain:", error);
-      toast({
-        title: "Komplain Gagal Dikirim",
-        description: error instanceof Error ? error.message : "Komplain belum tersimpan. Silakan coba lagi.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSubmittingComplaint(false);
-    }
-  };
 
   const handleLogout = () => {
     localStorage.removeItem("rentmate_current_username");
@@ -532,6 +534,47 @@ export default function Profile() {
       path: "/syarat-ketentuan"
     },
   ];
+
+  const unifiedHistory = useMemo(() => {
+    // 1. Map bookings
+    const mappedBookings = bookings.map(b => ({
+      ...b,
+      historyType: "booking" as const,
+      sortDate: new Date(b.createdAt || b.date).getTime()
+    }));
+
+    // 2. Map top up
+    const mappedTopUps = myTopUpRequests.map(t => ({
+      ...t,
+      historyType: "saldo" as const,
+      sortDate: new Date(t.createdAt).getTime()
+    }));
+
+    // 3. Map penarikan saldo (withdrawal)
+    const mappedWithdrawals = myWithdrawalRequests.map(w => ({
+      ...w,
+      historyType: "withdrawal" as const,
+      sortDate: new Date(w.createdAt).getTime()
+    }));
+
+    // 4. Combine & Filter
+    let combined = [...mappedBookings, ...mappedTopUps, ...mappedWithdrawals];
+
+    if (historyTypeFilter !== "all") {
+      combined = combined.filter(item => item.historyType === historyTypeFilter);
+    }
+
+    // 5. Sort
+    combined.sort((a, b) => {
+      if (historyTimeFilter === "newest") {
+        return b.sortDate - a.sortDate;
+      }
+      return a.sortDate - b.sortDate;
+    });
+
+    return combined;
+  }, [bookings, myTopUpRequests, myWithdrawalRequests, historyTypeFilter, historyTimeFilter]);
+
 
   if (isLoadingUser) {
     return (
@@ -726,7 +769,7 @@ export default function Profile() {
 
         {/* Wallet Card */}
         <Card className="p-6 mb-6 bg-gradient-hero text-primary-foreground">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-xl bg-primary-foreground/20 flex items-center justify-center">
                 <Wallet className="w-6 h-6" />
@@ -736,9 +779,20 @@ export default function Profile() {
                 <p className="text-2xl font-bold">{formatPrice(userData.wallet)}</p>
               </div>
             </div>
-            <Button variant="secondary" className="text-foreground" onClick={() => setIsTopUpOpen(true)}>
-              Isi Saldo
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" className="text-foreground gap-1.5 shadow-sm" onClick={() => setIsTopUpOpen(true)}>
+                <PlusCircle className="w-4 h-4 text-orange-600" />
+                Isi Saldo
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-white/10 hover:bg-white/20 text-white border-white/40 gap-1.5 shadow-sm backdrop-blur"
+                onClick={() => setIsWithdrawalOpen(true)}
+              >
+                <ArrowUpRight className="w-4 h-4" />
+                Tarik Saldo
+              </Button>
+            </div>
           </div>
         </Card>
 
@@ -773,202 +827,254 @@ export default function Profile() {
           </TabsList>
 
           {/* Bookings Tab */}
+          
           <TabsContent value="bookings" className="space-y-4">
-            
-            {myTopUpRequests.length > 0 && (
-              <div className="mb-8">
-                <h2 className="text-lg font-semibold mb-4">Riwayat Isi Saldo</h2>
-                <div className="space-y-3">
-                  {myTopUpRequests.map(req => (
-                    <Card key={req.id} className="p-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${req.status === 'pending' ? 'bg-yellow-100' : req.status === 'approved' ? 'bg-green-100' : 'bg-red-100'}`}>
-                          <Wallet className={`w-5 h-5 ${req.status === 'pending' ? 'text-yellow-600' : req.status === 'approved' ? 'text-green-600' : 'text-red-600'}`} />
-                        </div>
-                        <div>
-                          <p className="font-semibold text-sm">Isi Saldo Dompet</p>
-                          <p className="text-xs text-muted-foreground">{new Date(req.createdAt).toLocaleString("id-ID")}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold">{formatPrice(req.amount)}</p>
-                        <Badge variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : 'destructive'} className="mt-1">
-                          {req.status === 'pending' ? 'Menunggu' : req.status === 'approved' ? 'Berhasil' : 'Ditolak'}
-                        </Badge>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            )}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+              <h2 className="text-lg font-semibold">Riwayat Terpadu</h2>
+              
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                <Select value={historyTypeFilter} onValueChange={(val: any) => setHistoryTypeFilter(val)}>
+                  <SelectTrigger className="w-[140px] h-9">
+                    <SelectValue placeholder="Semua Jenis" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Jenis</SelectItem>
+                    <SelectItem value="booking">Pemesanan</SelectItem>
+                    <SelectItem value="saldo">Isi Saldo</SelectItem>
+                    <SelectItem value="withdrawal">Tarik Saldo</SelectItem>
+                  </SelectContent>
+                </Select>
 
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-semibold">Riwayat Pemesanan</h2>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={handleRefreshBookings}
-                disabled={isRefreshing}
-              >
-                {isRefreshing ? (
-                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <RefreshCw className="w-4 h-4" />
-                )}
-                Refresh
-              </Button>
+                <Select value={historyTimeFilter} onValueChange={(val: any) => setHistoryTimeFilter(val)}>
+                  <SelectTrigger className="w-[140px] h-9">
+                    <SelectValue placeholder="Waktu" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="newest">Terbaru</SelectItem>
+                    <SelectItem value="oldest">Terlama</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 h-9 ml-auto md:ml-0"
+                  onClick={handleRefreshBookings}
+                  disabled={isRefreshing}
+                >
+                  {isRefreshing ? (
+                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                  Refresh
+                </Button>
+              </div>
             </div>
 
             {isLoadingBookings ? (
               <div className="flex items-center justify-center h-32">
                 <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
               </div>
-            ) : bookings.length > 0 ? (
-              bookings.map((booking) => {
-                const talent = findTalent(booking.talentId);
-                if (!talent) return null;
-
-                return (
-                  <Card key={booking.id} className="p-4 cursor-pointer hover:shadow-md transition-shadow" onClick={() => handleViewTransactionDetails(booking)}>
-                    <div className="flex gap-4">
-                      <img
-                        src={talent.photo}
-                        alt={talent.name}
-                        className="w-20 h-20 rounded-xl object-cover"
-                        onError={(e) => {
-                          e.currentTarget.onerror = null;
-                          e.currentTarget.src = dicebearAvatar(talent.name, talent.gender as any, 128);
-                        }}
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-start justify-between mb-2">
-                          <div>
-                            <h3 className="font-bold">{talent.name}</h3>
-                            <p className="text-sm text-muted-foreground">
-                              {booking.purpose}
-                            </p>
+            ) : unifiedHistory.length > 0 ? (
+              <div className="space-y-4">
+                {unifiedHistory.map((item, index) => {
+                  if (item.historyType === "saldo") {
+                    const req = item as TopUpRequest;
+                    return (
+                      <Card key={`saldo-${req.id}-${index}`} className="p-4 flex items-center justify-between hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${req.status === 'pending' ? 'bg-yellow-100' : req.status === 'approved' ? 'bg-green-100' : 'bg-red-100'}`}>
+                            <Wallet className={`w-5 h-5 ${req.status === 'pending' ? 'text-yellow-600' : req.status === 'approved' ? 'text-green-600' : 'text-red-600'}`} />
                           </div>
-                          <Badge
-                            variant={
-                              booking.approvalStatus === "expired"
-                                ? "destructive"
-                                : booking.status === "completed"
-                                ? "success"
-                                : booking.status === "upcoming" || booking.approvalStatus === "approved"
-                                ? "accent"
-                                : "secondary"
-                            }
-                          >
-                            {booking.approvalStatus === "expired" ? "Kadaluarsa" : booking.status || booking.approvalStatus || "Pending"}
+                          <div>
+                            <p className="font-semibold text-sm">Isi Saldo Dompet</p>
+                            <p className="text-xs text-muted-foreground">{new Date(req.createdAt).toLocaleString("id-ID")}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-primary">{formatPrice(req.amount)}</p>
+                          <Badge variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : 'destructive'} className="mt-1">
+                            {req.status === 'pending' ? 'Menunggu' : req.status === 'approved' ? 'Berhasil' : 'Ditolak'}
                           </Badge>
                         </div>
-
-                        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-4 h-4" />
-                            {new Date(booking.date).toLocaleDateString("id-ID", {
-                              day: "numeric",
-                              month: "short",
-                              year: "numeric",
-                            })}
+                      </Card>
+                    );
+                  } else if (item.historyType === "withdrawal") {
+                    const req = item as WithdrawalRequest;
+                    return (
+                      <Card key={`wd-${req.id}-${index}`} className="p-4 flex items-center justify-between hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${req.status === 'pending' ? 'bg-amber-100 text-amber-600' : req.status === 'approved' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                            <ArrowUpRight className="w-5 h-5" />
                           </div>
-                          <div className="flex items-center gap-1">
-                            <Clock className="w-4 h-4" />
-                            {booking.time} • {booking.duration} jam
+                          <div>
+                            <p className="font-semibold text-sm">Tarik Saldo ke {req.bankName}</p>
+                            <p className="text-xs text-muted-foreground">{req.accountNumber} a.n {req.accountName} • {new Date(req.createdAt).toLocaleString("id-ID")}</p>
+                            {req.status === "rejected" && req.adminNote && (
+                              <p className="text-[11px] text-red-500 mt-0.5">Alasan penolakan: {req.adminNote}</p>
+                            )}
                           </div>
                         </div>
+                        <div className="text-right">
+                          <p className="font-bold text-orange-600">- {formatPrice(req.amount)}</p>
+                          <Badge variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : 'destructive'} className="mt-1">
+                            {req.status === 'pending' ? 'Menunggu Transfer' : req.status === 'approved' ? 'Berhasil Ditransfer' : 'Ditolak'}
+                          </Badge>
+                        </div>
+                      </Card>
+                    );
+                  } else {
 
-                        <div className="flex items-center justify-between mt-3 pt-3 border-t">
-                          <div className="flex items-center gap-3">
-                            <span className="font-bold text-primary">
-                              {formatPrice(booking.total)}
-                            </span>
-                            {(booking.status === "completed" || booking.approvalStatus === "completed") ? (
-                              !ratedBookings.includes(booking.id) ? (
+                    const booking = item as any;
+                    const talent = findTalent(booking.talentId);
+                    if (!talent) return null;
+
+                    return (
+                      <Card key={`booking-${booking.id}-${index}`} className="p-4 cursor-pointer hover:shadow-md transition-shadow" onClick={() => handleViewTransactionDetails(booking)}>
+                        <div className="flex gap-4">
+                          <img
+                            src={talent.photo}
+                            alt={talent.name}
+                            className="w-20 h-20 rounded-xl object-cover"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = dicebearAvatar(talent.name, talent.gender as any, 128);
+                            }}
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-start justify-between mb-2">
+                              <div>
+                                <h3 className="font-bold">{talent.name}</h3>
+                                <p className="text-sm text-muted-foreground">
+                                  {booking.purpose}
+                                </p>
+                              </div>
+                              <Badge
+                                variant={
+                                  booking.approvalStatus === "expired"
+                                    ? "destructive"
+                                    : booking.status === "completed"
+                                    ? "success"
+                                    : booking.status === "upcoming" || booking.approvalStatus === "approved"
+                                    ? "accent"
+                                    : "secondary"
+                                }
+                              >
+                                {booking.approvalStatus === "expired" ? "Kadaluarsa" : booking.status || booking.approvalStatus || "Pending"}
+                              </Badge>
+                            </div>
+
+                            <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                              <div className="flex items-center gap-1">
+                                <Calendar className="w-4 h-4" />
+                                {new Date(booking.date).toLocaleDateString("id-ID", {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                })}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Clock className="w-4 h-4" />
+                                {booking.time} • {booking.duration} jam
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t">
+                              <div className="flex items-center gap-3">
+                                <span className="font-bold text-primary">
+                                  {formatPrice(booking.total)}
+                                </span>
+                                {(booking.status === "completed" || booking.approvalStatus === "completed") ? (
+                                  !ratedBookings.includes(booking.id) ? (
+                                    <Button
+                                      variant="hero"
+                                      size="sm"
+                                      className="gap-1 cursor-pointer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setRatingModal({
+                                          isOpen: true,
+                                          talentId: booking.talentId,
+                                          bookingId: booking.id,
+                                        });
+                                      }}
+                                    >
+                                      <Star className="w-4 h-4" />
+                                      Beri Ulasan
+                                    </Button>
+                                  ) : (
+                                    <>
+                                      <Button size="sm" variant="outline" disabled>
+                                        Ulasan telah diberikan
+                                      </Button>
+                                      <div className="flex items-center gap-1 text-amber-500">
+                                        <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
+                                        <span className="font-semibold">{ratedDetails[booking.id]?.rating}</span>
+                                      </div>
+                                    </>
+                                  )
+                                ) : (
+                                  <Button size="sm" variant="outline" disabled>
+                                    Belum dapat memberi ulasan
+                                  </Button>
+                                )}
+                                {(booking.status === "upcoming" || booking.approvalStatus === "approved") && (
+                                  <Button
+                                    size="sm"
+                                    onClick={(e) => handleNavigateToChat(e, booking)}
+                                  >
+                                    Obrolan
+                                  </Button>
+                                )}
                                 <Button
-                                  variant="hero"
+                                  variant="ghost"
                                   size="sm"
-                                  className="gap-1 cursor-pointer"
+                                  className="gap-1 text-muted-foreground"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setRatingModal({
-                                      isOpen: true,
-                                      talentId: booking.talentId,
-                                      bookingId: booking.id,
-                                    });
+                                    handleViewTransactionDetails(booking);
                                   }}
                                 >
-                                  <Star className="w-4 h-4" />
-                                  Beri Ulasan
+                                  <Eye className="w-4 h-4" />
+                                  Lihat Detail
                                 </Button>
-                              ) : (
-                                <>
-                                  <Button size="sm" variant="outline" disabled>
-                                    Ulasan telah diberikan
+                                {(booking.status === "completed" || booking.approvalStatus === "approved" || booking.status === "upcoming") && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5 text-xs text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:border-rose-300 font-medium transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setComplaintModal({
+                                        isOpen: true,
+                                        bookingId: booking.id,
+                                        talentName: talent.name,
+                                        talentPhoto: talent.photo,
+                                        bookingDate: booking.date,
+                                        bookingPurpose: booking.purpose,
+                                      });
+                                    }}
+                                  >
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                    Komplain
                                   </Button>
-                                  <div className="flex items-center gap-1 text-amber-500">
-                                    <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                                    <span className="font-semibold">{ratedDetails[booking.id]?.rating}</span>
-                                  </div>
-                                </>
-                              )
-                            ) : (
-                              <Button size="sm" variant="outline" disabled>
-                                Belum dapat memberi ulasan
-                              </Button>
-                            )}
-                            {(booking.status === "upcoming" || booking.approvalStatus === "approved") && (
-                              <Button
-                                size="sm"
-                                onClick={(e) => handleNavigateToChat(e, booking)}
-                              >
-                                Obrolan
-                              </Button>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="gap-1 text-muted-foreground"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleViewTransactionDetails(booking);
-                              }}
-                            >
-                              <Eye className="w-4 h-4" />
-                              Lihat Detail
-                            </Button>
-                            {(booking.status === "completed" || booking.approvalStatus === "approved" || booking.status === "upcoming") && (
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                className="gap-1 ml-2"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setComplaintModal({
-                                    isOpen: true,
-                                    bookingId: booking.id,
-                                    talentName: talent.name,
-                                  });
-                                }}
-                              >
-                                <AlertTriangle className="w-4 h-4" />
-                                Komplain
-                              </Button>
-                            )}
+                                )}
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })
+                      </Card>
+                    );
+                  }
+                })}
+              </div>
             ) : (
               <Card className="p-8 text-center">
                 <Calendar className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-lg font-semibold mb-2">Belum Ada Pemesanan</h3>
+                <h3 className="text-lg font-semibold mb-2">Belum Ada Riwayat</h3>
                 <p className="text-muted-foreground mb-4">
-                  Anda belum memiliki riwayat pemesanan.
+                  Anda belum memiliki riwayat pemesanan atau pengisian saldo yang sesuai filter.
                 </p>
                 <Button onClick={() => navigate("/talents")}>
                   Cari Talent
@@ -1173,112 +1279,161 @@ export default function Profile() {
 
         {/* Top Up Modal — 3 Langkah */}
         <Dialog open={isTopUpOpen} onOpenChange={(open) => !open && resetTopUpModal()}>
-          <DialogContent className="sm:max-w-[480px]">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Wallet className="w-5 h-5 text-primary" />
-                Isi Saldo Dompet
-              </DialogTitle>
-            </DialogHeader>
+          <DialogContent className="sm:max-w-[480px] max-h-[90vh] p-0 overflow-hidden flex flex-col">
+            <div className="p-6 pb-2 shrink-0">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-primary" />
+                  Isi Saldo Dompet
+                </DialogTitle>
+              </DialogHeader>
 
-            {/* Progress Steps */}
-            <div className="flex items-center gap-2 mb-2">
-              {[1, 2, 3].map(s => (
-                <div key={s} className={`flex-1 h-1.5 rounded-full ${topUpStep >= s ? "bg-primary" : "bg-muted"}`} />
-              ))}
+              {/* Progress Steps */}
+              <div className="flex items-center gap-2 my-2">
+                {[1, 2, 3].map(s => (
+                  <div key={s} className={`flex-1 h-1.5 rounded-full ${topUpStep >= s ? "bg-primary" : "bg-muted"}`} />
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Langkah {topUpStep} dari 3: {topUpStep === 1 ? "Pilih Nominal" : topUpStep === 2 ? "Upload Bukti Transfer" : "Permintaan Dikirim"}
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground mb-4">
-              Langkah {topUpStep} dari 3: {topUpStep === 1 ? "Pilih Nominal" : topUpStep === 2 ? "Upload Bukti Transfer" : "Permintaan Dikirim"}
-            </p>
 
-            {/* STEP 1: Pilih Nominal */}
-            {topUpStep === 1 && (
-              <div className="space-y-4">
-                {/* Info rekening admin */}
-                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm space-y-1">
-                  <p className="font-semibold text-orange-800">📋 Transfer ke rekening berikut:</p>
-                  <p className="text-orange-700">BCA: <strong>1234 5678 90</strong> a/n PT TemanAcara</p>
-                  <p className="text-orange-700">BRI: <strong>9876 5432 10</strong> a/n PT TemanAcara</p>
-                </div>
-
-                <p className="text-sm text-muted-foreground">Pilih nominal top-up:</p>
-                <div className="grid grid-cols-3 gap-2">
-                  {TOP_UP_OPTIONS.map((amount) => (
-                    <Button
-                      key={amount}
-                      variant={topUpAmount === amount ? "hero" : "outline"}
-                      size="sm"
-                      onClick={() => { setTopUpAmount(amount); setTopUpCustomAmount(""); }}
-                    >
-                      {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount)}
-                    </Button>
-                  ))}
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Atau masukkan nominal lain:</p>
-                  <Input
-                    type="number"
-                    placeholder="Contoh: 150000"
-                    value={topUpCustomAmount}
-                    onChange={(e) => {
-                      setTopUpCustomAmount(e.target.value);
-                      setTopUpAmount(Number(e.target.value) || null);
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* STEP 2: Upload Bukti */}
-            {topUpStep === 2 && (
-              <div className="space-y-4">
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-800">
-                  <p className="font-semibold">Total Transfer: {formatPrice(topUpAmount || 0)}</p>
-                  <p className="text-xs mt-1">Upload screenshot / foto struk bukti transfer kamu.</p>
-                </div>
-                <div className="flex flex-col items-center gap-4">
-                  {topUpProofPreview ? (
-                    <div className="relative">
-                      <img src={topUpProofPreview} alt="Bukti" className="w-48 h-48 object-cover rounded-xl border" />
-                      <Button
-                        variant="destructive" size="sm"
-                        className="absolute -top-2 -right-2 w-6 h-6 p-0 rounded-full"
-                        onClick={() => { setTopUpProofFile(null); setTopUpProofPreview(null); }}
-                      >
-                        <X className="w-3 h-3" />
-                      </Button>
+            {/* Konten Scrollable */}
+            <div className="flex-1 overflow-y-auto px-6 py-2 space-y-4">
+              {/* STEP 1: Pilih Nominal */}
+              {topUpStep === 1 && (
+                <div className="space-y-4">
+                  {/* Info Rekening Terpusat QRIS */}
+                  <div className="bg-gradient-to-r from-orange-50 via-amber-50 to-orange-100/70 border border-orange-200 rounded-xl p-3.5 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-500/10 text-orange-600 flex items-center justify-center shrink-0">
+                      <QrCode className="w-5 h-5 text-orange-600" />
                     </div>
-                  ) : (
-                    <label className="w-48 h-48 border-2 border-dashed border-muted rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-primary transition-colors gap-2 text-muted-foreground text-sm">
-                      <Camera className="w-8 h-8" />
-                      <span>Klik untuk Upload</span>
-                      <input type="file" accept="image/*" className="hidden" onChange={handleTopUpProofUpload} />
-                    </label>
-                  )}
-                </div>
-              </div>
-            )}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-sm text-orange-950">Pembayaran Terpusat via QRIS</p>
+                        <Badge variant="outline" className="text-[10px] bg-orange-100 text-orange-800 border-orange-300">
+                          1 Rekening Kas
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-orange-800/80 mt-0.5">
+                        Penyimpanan dana aman di <strong>QRIS PT TEMAN ACARA INDONESIA</strong>. Mendukung semua m-banking & e-wallet.
+                      </p>
+                    </div>
+                  </div>
 
-            {/* STEP 3: Sukses */}
-            {topUpStep === 3 && (
-              <div className="text-center py-6 space-y-3">
-                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-                  <CheckCircle className="w-10 h-10 text-green-500" />
+                  <p className="text-sm text-muted-foreground font-medium">Pilih nominal top-up dompet:</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {TOP_UP_OPTIONS.map((amount) => (
+                      <Button
+                        key={amount}
+                        variant={topUpAmount === amount ? "hero" : "outline"}
+                        size="sm"
+                        onClick={() => { setTopUpAmount(amount); setTopUpCustomAmount(""); }}
+                        className="font-bold text-xs h-9"
+                      >
+                        {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount)}
+                      </Button>
+                    ))}
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1 font-medium">Atau masukkan nominal lain:</p>
+                    <Input
+                      type="number"
+                      placeholder="Contoh: 150000"
+                      value={topUpCustomAmount}
+                      onChange={(e) => {
+                        setTopUpCustomAmount(e.target.value);
+                        setTopUpAmount(Number(e.target.value) || null);
+                      }}
+                      className="h-10 text-sm font-semibold"
+                    />
+                  </div>
                 </div>
-                <h3 className="font-bold text-lg">Permintaan Terkirim!</h3>
-                <p className="text-sm text-muted-foreground">
-                  Permintaan top-up sebesar <strong>{formatPrice(topUpAmount || 0)}</strong> sedang menunggu verifikasi Admin.
-                  Saldo akan ditambahkan setelah Admin menyetujui bukti transfer kamu.
-                </p>
-                <p className="text-xs text-muted-foreground">Biasanya diproses dalam 1×24 jam</p>
-              </div>
-            )}
+              )}
 
-            <DialogFooter className="mt-4">
+              {/* STEP 2: Tampilkan QRIS Resmi & Upload Bukti Pembayaran */}
+              {topUpStep === 2 && (
+                <div className="space-y-4">
+                  <div className="bg-orange-50/80 border border-orange-200 rounded-xl p-3.5 text-center space-y-1">
+                    <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wider">Total Pembayaran Top-Up</p>
+                    <p className="text-2xl font-black text-orange-600 tracking-tight">{formatPrice(topUpAmount || 0)}</p>
+                    <p className="text-[11px] text-muted-foreground">Scan QRIS di bawah ini dengan m-Banking atau e-Wallet apa saja</p>
+                  </div>
+
+                  {/* Tampilan Barcode QRIS Resmi PT TemanAcara */}
+                  <div className="flex flex-col items-center justify-center p-3.5 bg-white border border-orange-100 rounded-2xl shadow-sm text-center">
+                    <div className="flex items-center justify-between w-full max-w-[210px] mb-2 px-1">
+                      <span className="text-[11px] font-bold text-gray-800 tracking-tight">QRIS STANDAR NASIONAL</span>
+                      <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-mono font-bold">GPN</span>
+                    </div>
+                    <div className="w-44 h-44 p-2 bg-white rounded-xl border-2 border-orange-200 shadow-inner flex items-center justify-center overflow-hidden">
+                      <img
+                        src={localStorage.getItem("rentmate_admin_qris_code") || "/assets/qris-default.png"}
+                        alt="QRIS PT TemanAcara"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div className="mt-2 text-center">
+                      <p className="text-xs font-bold text-gray-900">PT TEMAN ACARA INDONESIA</p>
+                      <p className="text-[10px] font-mono text-muted-foreground">NMID: ID1020023456789</p>
+                    </div>
+                  </div>
+
+                  {/* Upload Bukti Pembayaran */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-foreground text-center">Upload Bukti Pembayaran QRIS:</p>
+                    <div className="flex flex-col items-center">
+                      {topUpProofPreview ? (
+                        <div className="relative w-full max-w-[240px]">
+                          <img src={topUpProofPreview} alt="Bukti" className="w-full h-32 object-cover rounded-xl border border-orange-200 shadow-sm" />
+                          <Button
+                            variant="destructive" size="sm"
+                            className="absolute -top-2 -right-2 w-6 h-6 p-0 rounded-full shadow"
+                            onClick={() => { setTopUpProofFile(null); setTopUpProofPreview(null); }}
+                          >
+                            <X className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <label className="w-full max-w-[240px] h-24 border-2 border-dashed border-orange-300 bg-orange-50/30 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-orange-500 hover:bg-orange-50/60 transition-all gap-1.5 text-muted-foreground text-xs">
+                          <Camera className="w-5 h-5 text-orange-500" />
+                          <span className="font-medium text-foreground">Klik untuk Upload Screenshot</span>
+                          <span className="text-[10px] text-muted-foreground">Screenshot bukti bayar m-banking / e-wallet</span>
+                          <input type="file" accept="image/*" className="hidden" onChange={handleTopUpProofUpload} />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 3: Sukses */}
+              {topUpStep === 3 && (
+                <div className="text-center py-6 space-y-3">
+                  <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto">
+                    <CheckCircle className="w-10 h-10 text-orange-600" />
+                  </div>
+                  <h3 className="font-bold text-lg">Permintaan Terkirim!</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Permintaan top-up sebesar <strong>{formatPrice(topUpAmount || 0)}</strong> sedang menunggu verifikasi Admin.
+                    Saldo akan ditambahkan setelah Admin menyetujui bukti transfer kamu.
+                  </p>
+                  <p className="text-xs text-muted-foreground">Biasanya diproses dalam 1×24 jam</p>
+                </div>
+              )}
+            </div>
+
+            {/* Pinned Footer di bagian bawah modal */}
+            <DialogFooter className="p-4 px-6 border-t shrink-0 bg-background/95 backdrop-blur-sm gap-2">
               {topUpStep === 1 && (
                 <>
                   <Button variant="outline" onClick={resetTopUpModal}>Batal</Button>
-                  <Button onClick={() => setTopUpStep(2)} disabled={!topUpAmount || topUpAmount <= 0}>
+                  <Button 
+                    className="bg-orange-500 hover:bg-orange-600 text-white font-medium"
+                    onClick={() => setTopUpStep(2)} 
+                    disabled={!topUpAmount || topUpAmount <= 0}
+                  >
                     Lanjut →
                   </Button>
                 </>
@@ -1286,17 +1441,36 @@ export default function Profile() {
               {topUpStep === 2 && (
                 <>
                   <Button variant="outline" onClick={() => setTopUpStep(1)}>← Kembali</Button>
-                  <Button onClick={handleSubmitTopUp} disabled={!topUpProofPreview || isSubmittingTopUp}>
+                  <Button 
+                    className="bg-orange-500 hover:bg-orange-600 text-white font-medium shadow-md shadow-orange-500/20"
+                    onClick={handleSubmitTopUp} 
+                    disabled={!topUpProofPreview || isSubmittingTopUp}
+                  >
                     {isSubmittingTopUp ? "Mengirim..." : "Kirim Permintaan"}
                   </Button>
                 </>
               )}
               {topUpStep === 3 && (
-                <Button className="w-full" onClick={resetTopUpModal}>Tutup</Button>
+                <Button className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium" onClick={resetTopUpModal}>
+                  Tutup
+                </Button>
               )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Modal Tarik Saldo */}
+        {userData && (
+          <WithdrawalModal
+            isOpen={isWithdrawalOpen}
+            onClose={() => setIsWithdrawalOpen(false)}
+            currentUser={userData}
+            onSuccess={() => {
+              loadUserData();
+            }}
+          />
+        )}
+
 
 
         {/* Dialog Detail Transaksi */}
@@ -1446,32 +1620,16 @@ export default function Profile() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog open={complaintModal.isOpen} onOpenChange={(open) => !open && setComplaintModal({ ...complaintModal, isOpen: false })}>
-          <DialogContent className="sm:max-w-[425px]">
-            <DialogHeader>
-              <DialogTitle>Ajukan Komplain</DialogTitle>
-            </DialogHeader>
-            <div className="py-4">
-              <p className="text-sm text-muted-foreground mb-4">
-                Ada masalah dengan pesanan Anda bersama <strong>{complaintModal.talentName}</strong>? Ceritakan detailnya di bawah ini. Tim kami akan segera menindaklanjuti.
-              </p>
-              <Textarea
-                placeholder="Tuliskan keluhan atau masalah Anda di sini..."
-                value={complaintText}
-                onChange={(e) => setComplaintText(e.target.value)}
-                className="min-h-[120px]"
-              />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setComplaintModal({ ...complaintModal, isOpen: false })}>
-                Batal
-              </Button>
-              <Button variant="destructive" onClick={handleSubmitComplaint} disabled={isSubmittingComplaint || !complaintText.trim()}>
-                {isSubmittingComplaint ? "Mengirim..." : "Kirim Komplain"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        {/* Modal Ajukan Komplain Pelanggan */}
+        <SubmitComplaintModal
+          isOpen={complaintModal.isOpen}
+          onClose={() => setComplaintModal({ ...complaintModal, isOpen: false })}
+          bookingId={complaintModal.bookingId}
+          talentName={complaintModal.talentName}
+          talentPhoto={complaintModal.talentPhoto}
+          bookingDate={complaintModal.bookingDate}
+          bookingPurpose={complaintModal.bookingPurpose}
+        />
       </div>
     </div>
   );

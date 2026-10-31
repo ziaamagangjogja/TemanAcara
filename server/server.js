@@ -38,7 +38,7 @@ if (!fs.existsSync(uploadsDir)) {
 // Multer setup for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/');
+    cb(null, uploadsDir);
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname));
@@ -90,7 +90,22 @@ app.post('/api/admin/login', (req, res) => {
 });
 
 app.post('/register-talent', async (req, res) => {
-  const { email, password, name, phone, address, description, price, category, photo, ktp, age } = req.body;
+  const {
+    email,
+    password,
+    name,
+    phone,
+    address,
+    description,
+    price,
+    category,
+    photo,
+    ktp,
+    age,
+    experience_level,
+    price_expectation,
+    social_media,
+  } = req.body;
   
   try {
     const userId = crypto.randomUUID();
@@ -104,9 +119,25 @@ app.post('/register-talent', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     await pool.query(
-      `INSERT INTO profiles (user_id, email, password, full_name, phone, address, description, price, category, photo, ktp, age, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      [userId, email, hashedPassword, name, phone, address, description, price, category, photo, ktp, age]
+      `INSERT INTO profiles (user_id, email, password, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [
+        userId,
+        email,
+        hashedPassword,
+        name,
+        phone,
+        address,
+        description,
+        price || 0,
+        category,
+        photo,
+        ktp,
+        age,
+        experience_level || 'menengah',
+        price_expectation || 'Rp 50.000 - Rp 85.000',
+        social_media || '',
+      ]
     );
 
     res.status(201).json({ message: 'Pendaftaran berhasil! Silakan tunggu persetujuan dari admin.' });
@@ -139,24 +170,136 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Email atau password salah.' });
     }
     
-    if (user.status !== 'approved') {
-      return res.status(403).json({ message: 'Akun Anda belum disetujui oleh admin.' });
-    }
-    
     // Hapus password sebelum dikirim ke client (keamanan)
     const { password: _pw, ktp: _ktp, ...safeUser } = user;
-    res.status(200).json({ message: 'Login berhasil', user: { id: user.user_id, ...safeUser }, session: { access_token: 'dummy-token' } });
+    res.status(200).json({
+      message: 'Login berhasil',
+      user: {
+        id: user.user_id,
+        user_id: user.user_id,
+        status: user.status,
+        price_accepted: user.price_accepted,
+        pricing_tier: user.pricing_tier,
+        rejection_reason: user.rejection_reason,
+        appeal_note: user.appeal_note,
+        ...safeUser,
+      },
+      session: { access_token: 'dummy-token' }
+    });
   } catch (error) {
     console.error('Error during login:', error);
     res.status(500).json({ message: 'Terjadi kesalahan saat login.', error: error.message });
   }
 });
 
+app.get('/api/mitra/status', async (req, res) => {
+  const { email, userId } = req.query;
+  if (!email && !userId) {
+    return res.status(400).json({ message: 'Email atau userId dibutuhkan.' });
+  }
+  try {
+    let rows;
+    if (userId) {
+      [rows] = await pool.query(
+        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, status, rejection_reason, appeal_note, admin_price_note, created_at FROM profiles WHERE user_id = ?',
+        [userId]
+      );
+    } else {
+      [rows] = await pool.query(
+        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, status, rejection_reason, appeal_note, admin_price_note, created_at FROM profiles WHERE email = ?',
+        [email]
+      );
+    }
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Data mitra tidak ditemukan.' });
+    }
+    res.status(200).json(rows[0]);
+  } catch (error) {
+    console.error('Error getting mitra status:', error);
+    res.status(500).json({ message: 'Gagal memuat status mitra.', error: error.message });
+  }
+});
+
+app.post('/api/mitra/accept-price', async (req, res) => {
+  const { email, userId } = req.body;
+  if (!email && !userId) {
+    return res.status(400).json({ message: 'Email atau userId dibutuhkan.' });
+  }
+  try {
+    await pool.query(
+      'UPDATE profiles SET price_accepted = 1 WHERE email = ? OR user_id = ?',
+      [email || '', userId || '']
+    );
+    res.status(200).json({ message: 'Tarif berhasil disetujui! Akun Anda aktif.' });
+  } catch (error) {
+    console.error('Error accepting price:', error);
+    res.status(500).json({ message: 'Gagal menyetujui tarif.', error: error.message });
+  }
+});
+
+app.post('/api/mitra/appeal-price', async (req, res) => {
+  const { email, userId, note, requestedPrice } = req.body;
+  if (!email && !userId) {
+    return res.status(400).json({ message: 'Email atau userId dibutuhkan.' });
+  }
+  try {
+    const formattedNote = `[BANDING TARIF: Rp ${Number(requestedPrice || 0).toLocaleString('id-ID')}/jam] ${note || ''}`;
+    await pool.query(
+      'UPDATE profiles SET appeal_note = ?, admin_price_note = NULL WHERE email = ? OR user_id = ?',
+      [formattedNote, email || '', userId || '']
+    );
+    res.status(200).json({ message: 'Permohonan banding tarif Anda telah dikirim ke admin.' });
+  } catch (error) {
+    console.error('Error submitting appeal:', error);
+    res.status(500).json({ message: 'Gagal mengirim banding.', error: error.message });
+  }
+});
+
+// Endpoint untuk mengambil semua permohonan banding tarif mitra
+app.get('/api/admin/appeals', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, ktp, age, experience_level, price_expectation, social_media, status, appeal_note, admin_price_note, created_at 
+       FROM profiles 
+       WHERE appeal_note IS NOT NULL AND TRIM(appeal_note) != '' AND (price_accepted = 0 OR price_accepted IS NULL)
+       ORDER BY created_at DESC`
+    );
+    res.status(200).json(rows);
+  } catch (error) {
+    console.error('Error getting appeals:', error);
+    res.status(500).json({ message: 'Gagal mengambil data banding.', error: error.message });
+  }
+});
+
+// Endpoint untuk menolak banding tarif mitra (HANYA tolak banding harga, TIDAK menolak calon mitra)
+app.post('/api/admin/reject-appeal', async (req, res) => {
+  const { talentEmail, talentId, reason } = req.body;
+  if (!talentEmail && !talentId) {
+    return res.status(400).json({ message: 'Email atau ID talent dibutuhkan.' });
+  }
+  try {
+    const reasonText = reason && reason.trim() ? reason.trim() : 'Permohonan penyesuaian tarif belum dapat disetujui. Tarif tetap sesuai penetapan awal.';
+    const rejectionNote = `[BANDING DITOLAK] ${reasonText}`;
+
+    // PERHATIKAN: status tetap "approved", price_accepted tetap 0, HANYA appeal_note yang direset ke NULL dan admin_price_note diisi alasan
+    await pool.query(
+      'UPDATE profiles SET appeal_note = NULL, admin_price_note = ? WHERE email = ? OR user_id = ?',
+      [rejectionNote, talentEmail || '', talentId || '']
+    );
+
+    res.status(200).json({
+      message: 'Banding tarif berhasil ditolak. Tarif awal dipertahankan dan pendaftaran mitra tetap disetujui.',
+    });
+  } catch (error) {
+    console.error('Error rejecting appeal:', error);
+    res.status(500).json({ message: 'Gagal menolak banding.', error: error.message });
+  }
+});
+
 app.get('/pending-talents', async (req, res) => {
   try {
-    // Jangan kembalikan password/ktp ke frontend
     const [rows] = await pool.query(
-      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, age, status, created_at FROM profiles WHERE status = "pending"'
+      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, status, appeal_note, admin_price_note, created_at FROM profiles WHERE status = "pending"'
     );
     res.status(200).json(rows);
   } catch (error) {
@@ -191,18 +334,67 @@ app.post('/send-reminder', async (req, res) => {
 });
 
 app.post('/send-approval', async (req, res) => {
-  const { talentEmail, talentName, loginLink, price } = req.body;
+  const { talentEmail, talentName, loginLink, price, pricing_tier, admin_price_note } = req.body;
   try {
+    const tier = pricing_tier || 'tier2';
     if (price !== undefined && price !== null && price !== '') {
-      await pool.query('UPDATE profiles SET status = "approved", price = ? WHERE email = ?', [price, talentEmail]);
+      await pool.query(
+        'UPDATE profiles SET status = "approved", price = ?, pricing_tier = ?, admin_price_note = ?, appeal_note = NULL WHERE email = ?',
+        [price, tier, admin_price_note || null, talentEmail]
+      );
     } else {
-      await pool.query('UPDATE profiles SET status = "approved" WHERE email = ?', [talentEmail]);
+      await pool.query(
+        'UPDATE profiles SET status = "approved", pricing_tier = ?, admin_price_note = ?, appeal_note = NULL WHERE email = ?',
+        [tier, admin_price_note || null, talentEmail]
+      );
     }
     res.status(200).json({ message: 'Talent berhasil disetujui dan status telah diperbarui.' });
   } catch (error) {
     res.status(500).json({ message: 'Gagal menyetujui talent.', error: error.message });
   }
 });
+
+const handleRejectTalent = async (req, res) => {
+  const { talentEmail, talentId, reason } = req.body;
+  try {
+    const finalReason = reason || 'Dokumen belum memenuhi persyaratan verifikasi.';
+    await pool.query(
+      'UPDATE profiles SET status = "rejected", rejection_reason = ? WHERE (email IS NOT NULL AND email = ?) OR (user_id IS NOT NULL AND user_id = ?)',
+      [finalReason, talentEmail || '', talentId || '']
+    );
+
+    // Kirim notifikasi resmi ke user jika profil terhubung dengan akun user
+    try {
+      const [profiles] = await pool.query(
+        'SELECT user_id, full_name FROM profiles WHERE (email IS NOT NULL AND email = ?) OR (user_id IS NOT NULL AND user_id = ?)',
+        [talentEmail || '', talentId || '']
+      );
+      if (profiles.length > 0 && profiles[0].user_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'danger', 0, CURRENT_TIMESTAMP)`,
+          [
+            crypto.randomUUID(),
+            profiles[0].user_id,
+            'Pendaftaran Mitra Ditolak',
+            `Pendaftaran Anda sebagai mitra belum dapat disetujui. Alasan: ${finalReason}`
+          ]
+        );
+      }
+    } catch (notifErr) {
+      console.warn('Gagal mencatat notifikasi penolakan mitra:', notifErr.message);
+    }
+
+    res.status(200).json({ success: true, message: 'Pendaftaran talent ditolak dan status telah diperbarui.' });
+  } catch (error) {
+    console.error('Error rejecting talent:', error);
+    res.status(500).json({ success: false, message: 'Gagal menolak talent.', error: error.message });
+  }
+};
+
+app.post('/reject-talent', handleRejectTalent);
+app.post('/api/reject-talent', handleRejectTalent);
+app.post('/api/admin/reject-talent', handleRejectTalent);
 
 // =================================================================
 // NEW API ENDPOINTS FOR FRONTEND STORES
@@ -212,6 +404,10 @@ app.post('/send-approval', async (req, res) => {
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'No file uploaded' });
+  }
+  if (!req.file.mimetype.startsWith('image/')) {
+    fs.unlink(path.join(uploadsDir, req.file.filename), () => {});
+    return res.status(400).json({ message: 'Lampiran chat hanya menerima file gambar.' });
   }
   const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
   res.status(200).json({ url: fileUrl });
@@ -314,11 +510,11 @@ app.put('/api/users/:username', async (req, res) => {
   }
 });
 
-// Talents — JANGAN kembalikan password/ktp ke frontend!
+// Talents — HANYA talent yang sudah approved 100% dan sudah menyetujui tarif yang muncul ke publik!
 app.get('/api/talents', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, age, status, created_at FROM profiles WHERE status = "approved"'
+      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, age, status, price_accepted, created_at FROM profiles WHERE status = "approved" AND price_accepted = 1'
     );
     res.status(200).json(rows);
   } catch (error) {
@@ -407,12 +603,20 @@ app.get('/api/bookings', async (req, res) => {
 
 async function expireOverduePendingBookings() {
   const [overdueBookings] = await pool.query(`
-    SELECT id, user_id, purpose, payment_status
+    SELECT id, user_id, talent_id, purpose, total, payment_status, payment_method, approval_status
     FROM bookings
-    WHERE approval_status IN ('pending_approval', 'pending_mitra')
+    WHERE ((
+        approval_status = 'pending_mitra'
+        AND (
+          (mitra_response_deadline IS NOT NULL AND mitra_response_deadline <= NOW())
+          OR (mitra_response_deadline IS NULL AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW())
+        )
+      ) OR (
+        approval_status = 'pending_approval'
+        AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW()
+      ))
       AND date IS NOT NULL
       AND time IS NOT NULL
-      AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW()
   `);
 
   for (const booking of overdueBookings) {
@@ -422,10 +626,20 @@ async function expireOverduePendingBookings() {
       const [result] = await connection.query(`
         UPDATE bookings
         SET approval_status = 'expired',
-            payment_status = CASE WHEN payment_status = 'paid' THEN 'refund_pending' ELSE payment_status END
+            payment_status = CASE
+              WHEN payment_status = 'paid' AND payment_method = 'saldo' THEN 'refunded'
+              WHEN payment_status = 'paid' THEN 'refund_pending'
+              ELSE payment_status
+            END
         WHERE id = ?
           AND approval_status IN ('pending_approval', 'pending_mitra')
-          AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW()
+          AND (
+            (approval_status = 'pending_mitra' AND (
+              (mitra_response_deadline IS NOT NULL AND mitra_response_deadline <= NOW())
+              OR (mitra_response_deadline IS NULL AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW())
+            )) OR
+            (approval_status = 'pending_approval' AND DATE_ADD(TIMESTAMP(date, time), INTERVAL COALESCE(duration, 1) HOUR) <= NOW())
+          )
       `, [booking.id]);
 
       if (result.affectedRows === 0) {
@@ -433,14 +647,66 @@ async function expireOverduePendingBookings() {
         continue;
       }
 
+      if (booking.approval_status === 'pending_mitra' && booking.talent_id) {
+        const [strikeResult] = await connection.query(
+          `INSERT IGNORE INTO mitra_booking_violations (id, booking_id, mitra_id, reason, created_at)
+           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), booking.id, booking.talent_id, 'Tidak merespons booking sampai batas waktu.']
+        );
+
+        if (strikeResult.affectedRows > 0) {
+          const [[counts]] = await connection.query(
+            `SELECT
+               SUM(created_at >= DATE_SUB(NOW(), INTERVAL 60 DAY)) AS strikes_60_days,
+               COUNT(*) AS strikes_90_days
+             FROM mitra_booking_violations
+             WHERE mitra_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
+            [booking.talent_id]
+          );
+          const strikes60 = Number(counts.strikes_60_days || 0);
+          const strikes90 = Number(counts.strikes_90_days || 0);
+          const suspensionDays = strikes90 >= 5 ? 30 : strikes60 >= 3 ? 7 : 0;
+
+          if (suspensionDays > 0) {
+            await connection.query(
+              `INSERT INTO mitra_sanctions (mitra_id, suspended_until)
+               VALUES (?, DATE_ADD(NOW(), INTERVAL ${suspensionDays} DAY))
+               ON DUPLICATE KEY UPDATE
+                 suspended_until = GREATEST(COALESCE(suspended_until, NOW()), DATE_ADD(NOW(), INTERVAL ${suspensionDays} DAY))`,
+              [booking.talent_id]
+            );
+          }
+        }
+      }
+
+      if (booking.payment_status === 'paid' && booking.payment_method === 'saldo' && booking.user_id) {
+        const [walletUpdate] = await connection.query(
+          'UPDATE users SET wallet = wallet + ? WHERE id = ?',
+          [booking.total, booking.user_id]
+        );
+        if (walletUpdate.affectedRows === 0) {
+          throw new Error(`Saldo user ${booking.user_id} tidak ditemukan untuk refund booking ${booking.id}`);
+        }
+      }
+
       if (booking.user_id) {
-        const refundMessage = booking.payment_status === 'paid'
-          ? 'Pembayaran Anda tercatat. Pengembalian dana sedang menunggu penanganan Admin.'
+        const refundMessage = booking.payment_status === 'paid' && booking.payment_method === 'saldo'
+          ? 'Pesanan kedaluwarsa. Saldo aplikasi sudah dikembalikan ke dompet Anda.'
+          : booking.payment_status === 'paid'
+            ? 'Pembayaran Anda tercatat. Pengembalian dana transfer sedang menunggu penanganan Admin.'
           : 'Pesanan dibatalkan karena waktu jadwal sudah lewat sebelum mendapat persetujuan.';
         await connection.query(
           `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
            VALUES (?, ?, ?, ?, 'booking', 0, CURRENT_TIMESTAMP)`,
           [crypto.randomUUID(), booking.user_id, 'Pesanan Kedaluwarsa', refundMessage]
+        );
+      }
+
+      if (booking.talent_id && booking.approval_status === 'pending_mitra') {
+        await connection.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'admin', 0, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), booking.talent_id, 'Booking Terlewat', 'Booking kedaluwarsa karena belum direspons. Pelanggaran tercatat pada akun Anda.',]
         );
       }
 
@@ -465,9 +731,79 @@ function startPendingBookingExpiryWorker() {
   }, 60 * 1000);
 }
 
+function getMitraResponseDeadline(date, time) {
+  const now = new Date();
+  const bookingStart = new Date(`${String(date).slice(0, 10)}T${String(time).slice(0, 8)}`);
+  if (Number.isNaN(bookingStart.getTime())) return new Date(now.getTime() + 30 * 60 * 1000);
+
+  const hoursUntilBooking = (bookingStart.getTime() - now.getTime()) / (60 * 60 * 1000);
+  const responseWindow = hoursUntilBooking <= 4 ? 30 * 60 * 1000 : 12 * 60 * 60 * 1000;
+  const beforeStartWindow = hoursUntilBooking <= 4 ? 0 : 2 * 60 * 60 * 1000;
+  const deadline = Math.min(
+    now.getTime() + responseWindow,
+    bookingStart.getTime() - beforeStartWindow
+  );
+  return new Date(Math.max(now.getTime(), deadline));
+}
+
+async function getMitraConductStatus(mitraId) {
+  const [[counts]] = await pool.query(
+    `SELECT
+       COALESCE(SUM(created_at >= DATE_SUB(NOW(), INTERVAL 60 DAY)), 0) AS strikes_60_days,
+       COUNT(*) AS strikes_90_days
+     FROM mitra_booking_violations
+     WHERE mitra_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
+    [mitraId]
+  );
+  const [[sanction]] = await pool.query(
+    `SELECT suspended_until, suspended_until > NOW() AS is_suspended
+     FROM mitra_sanctions WHERE mitra_id = ?`,
+    [mitraId]
+  );
+  return {
+    strikes60Days: Number(counts.strikes_60_days || 0),
+    strikes90Days: Number(counts.strikes_90_days || 0),
+    suspendedUntil: sanction?.suspended_until || null,
+    isSuspended: Boolean(sanction?.is_suspended),
+  };
+}
+
+app.get('/api/mitra-conduct/:mitraId', async (req, res) => {
+  try {
+    res.status(200).json(await getMitraConductStatus(req.params.mitraId));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/bookings', async (req, res) => {
   try {
     const { id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, meeting_city, payment_status, approval_status, payment_code, created_at, notes } = req.body;
+    const [[sanction]] = await pool.query(
+      'SELECT suspended_until FROM mitra_sanctions WHERE mitra_id = ? AND suspended_until > NOW()',
+      [talent_id]
+    );
+    if (sanction) {
+      return res.status(423).json({
+        message: `Mitra sementara tidak menerima booking sampai ${new Date(sanction.suspended_until).toLocaleString('id-ID')}.`,
+      });
+    }
+
+    // Validasi jam operasional mitra (08:00 - 22:00 WIB)
+    if (time) {
+      const [startH, startM] = String(time).slice(0, 5).split(':').map(Number);
+      const startMin = (startH || 0) * 60 + (startM || 0);
+      const endMin = startMin + (Number(duration) || 1) * 60;
+      if (startMin < 8 * 60 || endMin > 22 * 60) {
+        const endHourFormatted = String(Math.floor(endMin / 60) % 24).padStart(2, '0');
+        const endMinuteFormatted = String(endMin % 60).padStart(2, '0');
+        const isNextDay = Math.floor(endMin / 60) >= 24;
+        return res.status(400).json({
+          message: `Waktu layanan melebihi jam operasional mitra (08:00–22:00). Pemesanan dari pukul ${time} selama ${duration} jam akan selesai pukul ${endHourFormatted}:${endMinuteFormatted}${isNextDay ? ' (besok)' : ''} WIB.`,
+        });
+      }
+    }
+
     const bookingId = id || crypto.randomUUID();
     await pool.query(
       `INSERT INTO bookings (id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, meeting_city, payment_status, approval_status, payment_code, created_at, notes)
@@ -497,6 +833,16 @@ app.put('/api/bookings/:id', async (req, res) => {
       updateFields.push(`${dbKey} = ?`);
       updateValues.push(value);
     }
+
+    if (req.body.approval_status === 'pending_mitra') {
+      const [bookings] = await pool.query('SELECT date, time FROM bookings WHERE id = ?', [req.params.id]);
+      if (bookings.length > 0) {
+        updateFields.push('mitra_response_deadline = ?');
+        updateValues.push(getMitraResponseDeadline(bookings[0].date, bookings[0].time));
+      }
+    } else if (['approved', 'rejected'].includes(req.body.approval_status)) {
+      updateFields.push('mitra_response_deadline = NULL');
+    }
     
     if (updateFields.length > 0) {
       const completingBooking = req.body.approval_status === 'completed';
@@ -518,6 +864,80 @@ app.put('/api/bookings/:id', async (req, res) => {
     res.status(200).json({ message: 'Booking updated', changed: false });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/mitra-bookings/:id/reject', async (req, res) => {
+  const connection = await pool.getConnection();
+  let transactionStarted = false;
+  try {
+    const mitraId = String(req.body.mitraId || '');
+    const reason = String(req.body.reason || '').trim();
+    if (!mitraId || reason.length < 5) {
+      return res.status(400).json({ message: 'Alasan penolakan wajib diisi (minimal 5 karakter).' });
+    }
+
+    await connection.beginTransaction();
+    transactionStarted = true;
+    const [rows] = await connection.query(
+      'SELECT * FROM bookings WHERE id = ? FOR UPDATE',
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      await connection.rollback();
+      transactionStarted = false;
+      return res.status(404).json({ message: 'Booking tidak ditemukan.' });
+    }
+
+    const booking = rows[0];
+    if (String(booking.talent_id) !== mitraId) {
+      await connection.rollback();
+      transactionStarted = false;
+      return res.status(403).json({ message: 'Booking ini bukan milik akun mitra tersebut.' });
+    }
+    if (!['pending_mitra', 'pending_approval'].includes(booking.approval_status)) {
+      await connection.rollback();
+      transactionStarted = false;
+      return res.status(409).json({ message: 'Booking sudah tidak menunggu respons.' });
+    }
+
+    let paymentStatus = booking.payment_status;
+    if (booking.payment_status === 'paid' && booking.payment_method === 'saldo') {
+      const [walletUpdate] = await connection.query(
+        'UPDATE users SET wallet = wallet + ? WHERE id = ?',
+        [booking.total, booking.user_id]
+      );
+      if (walletUpdate.affectedRows === 0) throw new Error('Saldo user gagal dikembalikan.');
+      paymentStatus = 'refunded';
+    } else if (booking.payment_status === 'paid') {
+      paymentStatus = 'refund_pending';
+    }
+
+    await connection.query(
+      `UPDATE bookings
+       SET approval_status = 'rejected', payment_status = ?, rejection_reason = ?, mitra_response_deadline = NULL
+       WHERE id = ?`,
+      [paymentStatus, reason, req.params.id]
+    );
+    await connection.query(
+      `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+       VALUES (?, ?, ?, ?, 'booking', 0, CURRENT_TIMESTAMP)`,
+      [
+        crypto.randomUUID(),
+        booking.user_id,
+        'Pesanan Ditolak Mitra',
+        `Mitra menolak pesanan. Alasan: ${reason}.${paymentStatus === 'refunded' ? ' Dana saldo sudah dikembalikan.' : paymentStatus === 'refund_pending' ? ' Pengembalian dana transfer menunggu admin.' : ''}`,
+      ]
+    );
+
+    await connection.commit();
+    transactionStarted = false;
+    res.status(200).json({ success: true, paymentStatus });
+  } catch (error) {
+    if (transactionStarted) await connection.rollback();
+    res.status(500).json({ message: error.message || 'Gagal menolak booking.' });
+  } finally {
+    connection.release();
   }
 });
 
@@ -570,7 +990,19 @@ app.post('/api/messages', async (req, res) => {
   let connection;
   let autoResponseLock;
   try {
-    const { id, chat_id, sender_id, sender_type, message, status, created_at, is_auto_response } = req.body;
+    const {
+      id, chat_id, sender_id, sender_type, message, status, created_at,
+      is_auto_response, attachment_type, attachment_url, latitude, longitude,
+    } = req.body;
+    const hasImage = attachment_type === 'image' && typeof attachment_url === 'string' && attachment_url.includes('/uploads/');
+    const latNum = parseFloat(latitude);
+    const lonNum = parseFloat(longitude);
+    const hasLocation = attachment_type === 'location' &&
+      Number.isFinite(latNum) && Number.isFinite(lonNum) &&
+      Math.abs(latNum) <= 90 && Math.abs(lonNum) <= 180;
+    if (attachment_type && !hasImage && !hasLocation) {
+      return res.status(400).json({ message: 'Data lampiran chat tidak valid.' });
+    }
     const isBookingWelcome = is_auto_response === true &&
       sender_type === 'talent' &&
       String(message || '').startsWith('Halo! Terima kasih sudah booking untuk ');
@@ -596,8 +1028,15 @@ app.post('/api/messages', async (req, res) => {
 
     const query = isBookingWelcome ? connection.query.bind(connection) : pool.query.bind(pool);
     await query(
-      `INSERT INTO messages (id, chat_id, sender_id, sender_type, message, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, chat_id, sender_id, sender_type, message, status, created_at]
+      `INSERT INTO messages (id, chat_id, sender_id, sender_type, message, status, created_at, attachment_type, attachment_url, latitude, longitude)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, chat_id, sender_id, sender_type, message, status, created_at,
+        hasImage ? 'image' : hasLocation ? 'location' : null,
+        hasImage ? attachment_url : null,
+        hasLocation ? Number(latitude) : null,
+        hasLocation ? Number(longitude) : null,
+      ]
     );
     res.status(201).json({ message: 'Message created' });
   } catch (error) {
@@ -609,6 +1048,42 @@ app.post('/api/messages', async (req, res) => {
       }
       connection.release();
     }
+  }
+});
+
+// Delete message endpoint (Hapus untuk Semua Orang)
+app.delete('/api/messages/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [msgRows] = await pool.query('SELECT chat_id FROM messages WHERE id = ?', [id]);
+    if (msgRows.length > 0) {
+      const chatId = msgRows[0].chat_id;
+      await pool.query('DELETE FROM messages WHERE id = ?', [id]);
+
+      // Update last_message di tabel chats
+      const [latest] = await pool.query(
+        'SELECT message, created_at, attachment_type FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1',
+        [chatId]
+      );
+      if (latest.length > 0) {
+        const lastTxt = latest[0].message || (latest[0].attachment_type ? 'Lampiran' : '');
+        await pool.query('UPDATE chats SET last_message = ?, last_message_time = ? WHERE id = ?', [
+          lastTxt,
+          latest[0].created_at,
+          chatId
+        ]);
+      } else {
+        await pool.query('UPDATE chats SET last_message = ?, last_message_time = NULL WHERE id = ?', [
+          '',
+          chatId
+        ]);
+      }
+    } else {
+      await pool.query('DELETE FROM messages WHERE id = ?', [id]);
+    }
+    res.status(200).json({ message: 'Pesan berhasil dihapus untuk semua orang.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -651,6 +1126,9 @@ app.get('/api/complaints', async (req, res) => {
       description: row.description,
       urgency: row.urgency,
       status: row.status,
+      proofImage: row.proof_image,
+      atFault: row.at_fault,
+      adminNotes: row.admin_notes,
       source: 'user',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -662,7 +1140,7 @@ app.get('/api/complaints', async (req, res) => {
 
 app.post('/api/complaints', async (req, res) => {
   try {
-    const { userId, bookingId, description, urgency = 'normal' } = req.body || {};
+    const { userId, bookingId, description, urgency = 'normal', proofImage } = req.body || {};
     if (!userId || !bookingId || !String(description || '').trim()) {
       return res.status(400).json({ message: 'Pelanggan, pesanan, dan deskripsi komplain wajib diisi.' });
     }
@@ -691,9 +1169,9 @@ app.post('/api/complaints', async (req, res) => {
 
     await pool.query(
       `INSERT INTO complaints
-        (id, user_id, user_name, user_email, user_phone, booking_id, talent_id, talent_name, subject, description, urgency, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      [id, userId, userName, users[0]?.email || '', users[0]?.phone || '', bookingId, bookings[0].talent_id, talentName, subject, String(description).trim(), safeUrgency]
+        (id, user_id, user_name, user_email, user_phone, booking_id, talent_id, talent_name, subject, description, urgency, status, proof_image)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [id, userId, userName, users[0]?.email || '', users[0]?.phone || '', bookingId, bookings[0].talent_id, talentName, subject, String(description).trim(), safeUrgency, proofImage || null]
     );
 
     const [created] = await pool.query('SELECT * FROM complaints WHERE id = ?', [id]);
@@ -712,6 +1190,9 @@ app.post('/api/complaints', async (req, res) => {
         description: row.description,
         urgency: row.urgency,
         status: row.status,
+        proofImage: row.proof_image,
+        atFault: row.at_fault,
+        adminNotes: row.admin_notes,
         source: 'user',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
@@ -722,25 +1203,328 @@ app.post('/api/complaints', async (req, res) => {
   }
 });
 
+app.get('/api/complaints/:id/chat', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [complaintRows] = await pool.query('SELECT * FROM complaints WHERE id = ?', [id]);
+    if (complaintRows.length === 0) {
+      return res.status(404).json({ message: 'Komplain tidak ditemukan.' });
+    }
+    const complaint = complaintRows[0];
+
+    // Find chat: first by booking_id
+    let chat = null;
+    let messages = [];
+
+    if (complaint.booking_id) {
+      const [chatRows] = await pool.query('SELECT * FROM chats WHERE booking_id = ? LIMIT 1', [complaint.booking_id]);
+      if (chatRows.length > 0) {
+        chat = chatRows[0];
+      }
+    }
+
+    // Fallback: search by user_id and talent_id
+    if (!chat && complaint.user_id && complaint.talent_id) {
+      const [chatRows] = await pool.query(
+        'SELECT * FROM chats WHERE user_id = ? AND talent_id = ? ORDER BY last_message_time DESC LIMIT 1',
+        [complaint.user_id, complaint.talent_id]
+      );
+      if (chatRows.length > 0) {
+        chat = chatRows[0];
+      }
+    }
+
+    if (chat) {
+      const [msgRows] = await pool.query(
+        'SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at ASC',
+        [chat.id]
+      );
+      messages = msgRows;
+    }
+
+    // Fetch user details
+    let user = null;
+    if (complaint.user_id) {
+      const [userRows] = await pool.query('SELECT id, name, username, email, phone, photo FROM users WHERE id = ?', [complaint.user_id]);
+      if (userRows.length > 0) {
+        user = userRows[0];
+      }
+    }
+
+    // Fetch talent details
+    let talent = null;
+    if (complaint.talent_id) {
+      const [talentRows] = await pool.query('SELECT user_id, full_name, email, phone, photo, category, price, address FROM profiles WHERE user_id = ?', [complaint.talent_id]);
+      if (talentRows.length > 0) {
+        talent = talentRows[0];
+      }
+    }
+
+    // Fetch booking details
+    let booking = null;
+    if (complaint.booking_id) {
+      const [bookingRows] = await pool.query('SELECT * FROM bookings WHERE id = ?', [complaint.booking_id]);
+      if (bookingRows.length > 0) {
+        booking = bookingRows[0];
+      }
+    }
+
+    res.status(200).json({
+      complaint: {
+        id: complaint.id,
+        userId: complaint.user_id,
+        userName: complaint.user_name,
+        userEmail: complaint.user_email,
+        userPhone: complaint.user_phone,
+        bookingId: complaint.booking_id,
+        talentId: complaint.talent_id,
+        talentName: complaint.talent_name,
+        subject: complaint.subject,
+        description: complaint.description,
+        urgency: complaint.urgency,
+        status: complaint.status,
+        proofImage: complaint.proof_image,
+        atFault: complaint.at_fault,
+        adminNotes: complaint.admin_notes,
+        createdAt: complaint.created_at,
+        updatedAt: complaint.updated_at,
+      },
+      booking,
+      chat,
+      messages,
+      user: user || {
+        id: complaint.user_id,
+        name: complaint.user_name,
+        email: complaint.user_email,
+        phone: complaint.user_phone,
+      },
+      talent: talent || {
+        user_id: complaint.talent_id,
+        full_name: complaint.talent_name,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Gagal memuat riwayat percakapan komplain.', error: error.message });
+  }
+});
+
 app.put('/api/complaints/:id', async (req, res) => {
   try {
     const allowedStatuses = ['pending', 'in-progress', 'resolved'];
-    const { status } = req.body || {};
-    if (!allowedStatuses.includes(status)) {
+    const { status, atFault, adminNotes } = req.body || {};
+    
+    if (status && !allowedStatuses.includes(status)) {
       return res.status(400).json({ message: 'Status komplain tidak valid.' });
     }
 
-    const [result] = await pool.query(
-      'UPDATE complaints SET status = ? WHERE id = ?',
-      [status, req.params.id]
+    const [rows] = await pool.query('SELECT * FROM complaints WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ message: 'Komplain tidak ditemukan.' });
+    
+    const complaint = rows[0];
+
+    const newStatus = status || complaint.status;
+    const newAtFault = atFault !== undefined ? atFault : complaint.at_fault;
+    const newAdminNotes = adminNotes !== undefined ? adminNotes : complaint.admin_notes;
+
+    await pool.query(
+      'UPDATE complaints SET status = ?, at_fault = ?, admin_notes = ? WHERE id = ?',
+      [newStatus, newAtFault, newAdminNotes, req.params.id]
     );
-    if (result.affectedRows === 0) {
-      const [rows] = await pool.query('SELECT id FROM complaints WHERE id = ?', [req.params.id]);
-      if (rows.length === 0) return res.status(404).json({ message: 'Komplain tidak ditemukan.' });
+
+    const bookingSnippet = complaint.booking_id ? `#${String(complaint.booking_id).slice(0, 8)}` : '';
+
+    // If resolved and mitra is at fault, add strike and calculate sanction
+    if (newStatus === 'resolved' && newAtFault === 'mitra') {
+      const violationId = crypto.randomUUID();
+      try {
+        await pool.query(
+          `INSERT INTO mitra_booking_violations (id, booking_id, mitra_id, reason, created_at)
+           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [violationId, complaint.booking_id, complaint.talent_id, `Komplain Terbukti Bersalah: ${newAdminNotes || 'Pelanggaran tugas mitra'}`]
+        );
+
+        // Calculate strikes for mitra
+        if (complaint.talent_id) {
+          const [[counts]] = await pool.query(
+            `SELECT
+               SUM(created_at >= DATE_SUB(NOW(), INTERVAL 60 DAY)) AS strikes_60_days,
+               COUNT(*) AS strikes_90_days
+             FROM mitra_booking_violations
+             WHERE mitra_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
+            [complaint.talent_id]
+          );
+          const strikes60 = Number(counts.strikes_60_days || 0);
+          const strikes90 = Number(counts.strikes_90_days || 0);
+          const suspensionDays = strikes90 >= 5 ? 30 : strikes60 >= 3 ? 7 : 0;
+
+          if (suspensionDays > 0) {
+            await pool.query(
+              `INSERT INTO mitra_sanctions (mitra_id, suspended_until)
+               VALUES (?, DATE_ADD(NOW(), INTERVAL ${suspensionDays} DAY))
+               ON DUPLICATE KEY UPDATE
+                 suspended_until = GREATEST(COALESCE(suspended_until, NOW()), DATE_ADD(NOW(), INTERVAL ${suspensionDays} DAY))`,
+              [complaint.talent_id]
+            );
+          }
+        }
+      } catch (err) {
+        if (err.code !== 'ER_DUP_ENTRY') {
+          console.error('Error inserting violation:', err);
+        }
+      }
+
+      // Send notifications to both
+      if (complaint.talent_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'danger', 0, CURRENT_TIMESTAMP)`,
+          [
+            crypto.randomUUID(),
+            complaint.talent_id,
+            'Peringatan Pelanggaran Komplain',
+            `Admin telah memeriksa bukti & riwayat chat pesanan ${bookingSnippet}. Anda dinyatakan bersalah (+1 Poin Pelanggaran). Catatan Admin: ${newAdminNotes || '-'}`
+          ]
+        ).catch(() => {});
+      }
+
+      if (complaint.user_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'success', 0, CURRENT_TIMESTAMP)`,
+          [
+            crypto.randomUUID(),
+            complaint.user_id,
+            'Komplain Anda Telah Diterima & Diselesaikan',
+            `Admin telah memverifikasi bukti dan riwayat pesan untuk pesanan ${bookingSnippet}. Mitra (${complaint.talent_name}) telah diberikan sanksi pelanggaran. Catatan Admin: ${newAdminNotes || '-'}`
+          ]
+        ).catch(() => {});
+      }
+    } else if (newStatus === 'resolved' && newAtFault === 'user') {
+      // User is at fault!
+      if (complaint.user_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'warning', 0, CURRENT_TIMESTAMP)`,
+          [
+            crypto.randomUUID(),
+            complaint.user_id,
+            'Peringatan: Pelanggaran Pengguna',
+            `Setelah meninjau bukti dan riwayat percakapan pada pesanan ${bookingSnippet}, laporan komplain Anda dinyatakan ditolak / terjadi pelanggaran oleh pihak pengguna. Catatan Admin: ${newAdminNotes || '-'}`
+          ]
+        ).catch(() => {});
+      }
+
+      if (complaint.talent_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'success', 0, CURRENT_TIMESTAMP)`,
+          [
+            crypto.randomUUID(),
+            complaint.talent_id,
+            'Laporan Komplain Ditolak (Mitra Bebas Sanksi)',
+            `Admin telah meninjau riwayat percakapan untuk pesanan ${bookingSnippet}. Anda dinyatakan tidak bersalah dan reputasi Anda tetap aman.`
+          ]
+        ).catch(() => {});
+      }
+    } else if (newStatus === 'resolved' && newAtFault === 'none') {
+      // Neutral resolution
+      const neutralMessage = `Komplain pesanan ${bookingSnippet} telah diselesaikan oleh Admin secara damai dan netral tanpa sanksi. Catatan Admin: ${newAdminNotes || '-'}`;
+      if (complaint.user_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'info', 0, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), complaint.user_id, 'Komplain Telah Diselesaikan', neutralMessage]
+        ).catch(() => {});
+      }
+      if (complaint.talent_id) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'info', 0, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), complaint.talent_id, 'Komplain Telah Diselesaikan', neutralMessage]
+        ).catch(() => {});
+      }
     }
+
     res.status(200).json({ success: true });
   } catch (error) {
     res.status(500).json({ message: 'Status komplain gagal diperbarui.', error: error.message });
+  }
+});
+
+// =================================================================
+// ADMIN LOGIN AUTHENTICATION
+// =================================================================
+app.post('/api/admin/login', (req, res) => {
+  const { email, password } = req.body || {};
+  const validEmails = ['admin@rentmate.com', 'admin@temanacara.com', 'admin'];
+  const validPasswords = ['admin123', 'admin', 'admin@123', 'password'];
+
+  if (
+    (validEmails.includes(email?.trim()?.toLowerCase()) || email?.toLowerCase()?.includes('admin')) &&
+    validPasswords.includes(password?.trim())
+  ) {
+    return res.status(200).json({ success: true, message: 'Login admin berhasil', token: 'admin_session_token' });
+  }
+
+  return res.status(401).json({ message: 'Email atau password admin salah!' });
+});
+
+// =================================================================
+// FINANCIAL SUMMARY (STATISTIK KEUANGAN & DANA MENGENDAP USER)
+// =================================================================
+app.get('/api/admin/financial-summary', async (req, res) => {
+  try {
+    // 1. Total saldo mengendap di seluruh dompet pengguna saat ini
+    const [userWalletRows] = await pool.query('SELECT COALESCE(SUM(wallet), 0) AS total_user_wallet, COUNT(id) AS total_users FROM users');
+    const totalUserWallet = Number(userWalletRows[0]?.total_user_wallet || 0);
+    const totalRegisteredUsers = Number(userWalletRows[0]?.total_users || 0);
+
+    // 2. Total top-up disetujui (Kas masuk dari top-up)
+    const [topupApprovedRows] = await pool.query("SELECT COALESCE(SUM(amount), 0) AS total_approved_topup, COUNT(id) AS approved_count FROM topup_requests WHERE status = 'approved'");
+    const totalApprovedTopup = Number(topupApprovedRows[0]?.total_approved_topup || 0);
+    const approvedTopupCount = Number(topupApprovedRows[0]?.approved_count || 0);
+
+    // 3. Pending top-up
+    const [topupPendingRows] = await pool.query("SELECT COALESCE(SUM(amount), 0) AS pending_amount, COUNT(id) AS pending_count FROM topup_requests WHERE status = 'pending'");
+    const pendingTopupAmount = Number(topupPendingRows[0]?.pending_amount || 0);
+    const pendingTopupCount = Number(topupPendingRows[0]?.pending_count || 0);
+
+    // 4. Withdrawal approved & pending
+    const [wdApprovedRows] = await pool.query("SELECT COALESCE(SUM(amount), 0) AS total_approved_wd, COUNT(id) AS approved_count FROM withdrawal_requests WHERE status = 'approved'");
+    const totalApprovedWithdrawal = Number(wdApprovedRows[0]?.total_approved_wd || 0);
+    const approvedWithdrawalCount = Number(wdApprovedRows[0]?.approved_count || 0);
+
+    const [wdPendingRows] = await pool.query("SELECT COALESCE(SUM(amount), 0) AS pending_amount, COUNT(id) AS pending_count FROM withdrawal_requests WHERE status = 'pending'");
+    const pendingWithdrawalAmount = Number(wdPendingRows[0]?.pending_amount || 0);
+    const pendingWithdrawalCount = Number(wdPendingRows[0]?.pending_count || 0);
+
+    // 5. Total komisi admin dari booking selesai (20%)
+    const [bookingRows] = await pool.query("SELECT COALESCE(SUM(total), 0) AS total_gross_booking FROM bookings WHERE approval_status IN ('completed', 'approved')");
+    const totalGrossBooking = Number(bookingRows[0]?.total_gross_booking || 0);
+    const totalCommissionRevenue = Math.round(totalGrossBooking * 0.20);
+
+    // 6. Total Kas Fisik di Rekening / QRIS Admin:
+    // Dana Mengendap Pengguna (Saldo Dompet) + Total Komisi Platform (20%)
+    const totalAdminTreasury = totalUserWallet + totalCommissionRevenue;
+
+    res.status(200).json({
+      totalUserWallet,
+      totalRegisteredUsers,
+      totalApprovedTopup,
+      approvedTopupCount,
+      pendingTopupAmount,
+      pendingTopupCount,
+      totalApprovedWithdrawal,
+      approvedWithdrawalCount,
+      pendingWithdrawalAmount,
+      pendingWithdrawalCount,
+      totalGrossBooking,
+      totalCommissionRevenue,
+      totalAdminTreasury
+    });
+  } catch (error) {
+    console.error('Error getting financial summary:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -847,6 +1631,236 @@ app.post('/api/topup-requests/:id/reject', async (req, res) => {
 });
 
 // =================================================================
+// WITHDRAWAL REQUESTS (PENARIKAN SALDO)
+// =================================================================
+app.get('/api/withdrawal-requests', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT w.*, u.photo AS user_avatar
+       FROM withdrawal_requests AS w
+       LEFT JOIN users AS u ON u.id = w.user_id
+       ORDER BY w.created_at DESC`
+    );
+    const formatted = rows.map(r => ({
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      userEmail: r.user_email,
+      userPhoto: r.user_photo || r.user_avatar || '',
+      role: r.role || 'user',
+      amount: Number(r.amount),
+      bankName: r.bank_name,
+      accountNumber: r.account_number,
+      accountName: r.account_name,
+      status: r.status,
+      proofImageBase64: r.proof_image,
+      adminNote: r.admin_note,
+      createdAt: r.created_at,
+      processedAt: r.processed_at
+    }));
+    res.status(200).json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/withdrawal-requests/user/:userId', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM withdrawal_requests WHERE user_id = ? ORDER BY created_at DESC`,
+      [req.params.userId]
+    );
+    const formatted = rows.map(r => ({
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      userEmail: r.user_email,
+      userPhoto: r.user_photo || '',
+      role: r.role || 'user',
+      amount: Number(r.amount),
+      bankName: r.bank_name,
+      accountNumber: r.account_number,
+      accountName: r.account_name,
+      status: r.status,
+      proofImageBase64: r.proof_image,
+      adminNote: r.admin_note,
+      createdAt: r.created_at,
+      processedAt: r.processed_at
+    }));
+    res.status(200).json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/withdrawal-requests', async (req, res) => {
+  try {
+    const { id, userId, userName, userEmail, userPhoto, role = 'user', amount, bankName, accountNumber, accountName } = req.body;
+    
+    const parsedAmount = Number(amount);
+    if (!userId || !parsedAmount || parsedAmount <= 0 || !bankName || !accountNumber || !accountName) {
+      return res.status(400).json({ error: 'Data penarikan saldo tidak lengkap atau nominal tidak valid' });
+    }
+
+    // 1. Cek saldo dompet HANYA jika role adalah user biasa dan terdaftar di database
+    if (role === 'user') {
+      const [userRows] = await pool.query('SELECT wallet FROM users WHERE id = ?', [userId]);
+      if (userRows.length > 0) {
+        const currentWallet = Number(userRows[0].wallet || 0);
+        if (currentWallet < parsedAmount) {
+          return res.status(400).json({ error: 'Saldo dompet tidak mencukupi untuk penarikan ini' });
+        }
+        // Potong saldo user di DB (langsung didebet agar tidak double-spend)
+        await pool.query('UPDATE users SET wallet = wallet - ? WHERE id = ?', [parsedAmount, userId]);
+      }
+    }
+
+    const reqId = id || `wd_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const initialStatus = role === 'admin' ? 'approved' : 'pending';
+    const processedAt = role === 'admin' ? new Date() : null;
+    const adminNote = role === 'admin' ? 'Pencairan laba komisi platform (Admin Profit)' : null;
+
+    // 2. Simpan permintaan penarikan
+    await pool.query(
+      `INSERT INTO withdrawal_requests 
+       (id, user_id, user_name, user_email, user_photo, role, amount, bank_name, account_number, account_name, status, admin_note, created_at, processed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+      [reqId, userId, userName, userEmail, userPhoto || null, role, parsedAmount, bankName, accountNumber, accountName, initialStatus, adminNote, processedAt]
+    );
+
+    // 3. Buat notifikasi jika bukan pencairan profit admin mandiri
+    if (role !== 'admin') {
+      const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+      const notifId = crypto.randomUUID();
+      try {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+          [
+            notifId,
+            userId,
+            role === 'mitra' ? 'Permintaan Pencairan Pendapatan Terkirim ⏳' : 'Permintaan Tarik Saldo Terkirim ⏳',
+            `Permintaan penarikan saldo sebesar ${fmt(parsedAmount)} ke ${bankName} (${accountNumber} a.n ${accountName}) telah dikirim dan sedang menunggu transfer dari Admin.`,
+            'payment'
+          ]
+        );
+      } catch (notifErr) {
+        console.warn('Gagal mencatat notifikasi penarikan:', notifErr.message);
+      }
+    }
+
+    res.status(201).json({
+      id: reqId,
+      userId,
+      userName,
+      userEmail,
+      userPhoto,
+      role,
+      amount: parsedAmount,
+      bankName,
+      accountNumber,
+      accountName,
+      status: initialStatus,
+      adminNote,
+      createdAt: new Date().toISOString(),
+      processedAt: processedAt ? processedAt.toISOString() : undefined
+    });
+  } catch (error) {
+    console.error('Error submitting withdrawal request:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/withdrawal-requests/:id/approve', async (req, res) => {
+  try {
+    const { adminNote, proofImageBase64 } = req.body;
+    const [rows] = await pool.query('SELECT * FROM withdrawal_requests WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Permintaan penarikan tidak ditemukan' });
+
+    const withdrawal = rows[0];
+    if (withdrawal.status !== 'pending') {
+      return res.status(400).json({ error: 'Permintaan ini sudah diproses sebelumnya' });
+    }
+
+    // Update status ke approved
+    await pool.query(
+      `UPDATE withdrawal_requests SET status = 'approved', admin_note = ?, proof_image = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [adminNote || 'Penarikan telah berhasil ditransfer oleh Admin', proofImageBase64 || null, req.params.id]
+    );
+
+    // Kirim notifikasi sukses ke user/mitra
+    const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+    const notifId = crypto.randomUUID();
+    try {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+        [
+          notifId,
+          withdrawal.user_id,
+          withdrawal.role === 'mitra' ? 'Pencairan Pendapatan Mitra Berhasil! 💸' : 'Penarikan Saldo Berhasil! 💸',
+          `Dana penarikan sebesar ${fmt(withdrawal.amount)} telah berhasil ditransfer ke rekening ${withdrawal.bank_name} (${withdrawal.account_number} a.n ${withdrawal.account_name}).`,
+          'payment'
+        ]
+      );
+    } catch (notifErr) {
+      console.warn('Gagal mencatat notifikasi approval:', notifErr.message);
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/withdrawal-requests/:id/reject', async (req, res) => {
+  try {
+    const { adminNote } = req.body;
+    const [rows] = await pool.query('SELECT * FROM withdrawal_requests WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Permintaan penarikan tidak ditemukan' });
+
+    const withdrawal = rows[0];
+    if (withdrawal.status !== 'pending') {
+      return res.status(400).json({ error: 'Permintaan ini sudah diproses sebelumnya' });
+    }
+
+    // 1. Update status ke rejected
+    await pool.query(
+      `UPDATE withdrawal_requests SET status = 'rejected', admin_note = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [adminNote || 'Permintaan penarikan ditolak oleh Admin', req.params.id]
+    );
+
+    // 2. Kembalikan saldo (refund) HANYA jika role === 'user'
+    if (withdrawal.role === 'user') {
+      await pool.query(
+        `UPDATE users SET wallet = wallet + ? WHERE id = ?`,
+        [withdrawal.amount, withdrawal.user_id]
+      );
+    }
+
+    // 3. Kirim notifikasi pengembalian saldo ke user/mitra
+    const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+    const notifId = crypto.randomUUID();
+    try {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+        [
+          notifId,
+          withdrawal.user_id,
+          withdrawal.role === 'mitra' ? 'Pencairan Pendapatan Ditolak ⚠️' : 'Penarikan Saldo Ditolak ⚠️',
+          `Permintaan penarikan sebesar ${fmt(withdrawal.amount)} ditolak. Alasan: ${adminNote || 'Informasi rekening/tujuan tidak valid'}.${withdrawal.role === 'user' ? ' Saldo telah dikembalikan ke dompet kamu.' : ' Saldo pendapatan kamu tetap utuh.'}`,
+          'admin'
+        ]
+      );
+    } catch (notifErr) {
+      console.warn('Gagal mencatat notifikasi reject:', notifErr.message);
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =================================================================
 // NOTIFICATIONS API
 // =================================================================
 app.get('/api/notifications/:userId', async (req, res) => {
@@ -924,6 +1938,29 @@ async function ensureTopUpTable() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS withdrawal_requests (
+      id VARCHAR(100) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      user_name VARCHAR(255) NOT NULL,
+      user_email VARCHAR(255),
+      user_photo LONGTEXT,
+      role VARCHAR(20) DEFAULT 'user',
+      amount DECIMAL(10,2) NOT NULL,
+      bank_name VARCHAR(50) NOT NULL,
+      account_number VARCHAR(100) NOT NULL,
+      account_name VARCHAR(255) NOT NULL,
+      status VARCHAR(50) DEFAULT 'pending',
+      proof_image LONGTEXT NULL,
+      admin_note TEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      processed_at TIMESTAMP NULL,
+      INDEX idx_withdrawals_user (user_id),
+      INDEX idx_withdrawals_status (status)
+    )
+  `);
+
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS complaints (
       id VARCHAR(36) PRIMARY KEY,
       user_id VARCHAR(36) NOT NULL,
@@ -945,6 +1982,16 @@ async function ensureTopUpTable() {
     )
   `);
 
+  try {
+    const [complaintCols] = await pool.query('DESCRIBE complaints');
+    const cNames = complaintCols.map(c => c.Field);
+    if (!cNames.includes('proof_image')) await pool.query('ALTER TABLE complaints ADD COLUMN proof_image LONGTEXT NULL AFTER status');
+    if (!cNames.includes('at_fault')) await pool.query("ALTER TABLE complaints ADD COLUMN at_fault VARCHAR(50) DEFAULT 'none' AFTER status");
+    if (!cNames.includes('admin_notes')) await pool.query('ALTER TABLE complaints ADD COLUMN admin_notes TEXT NULL AFTER at_fault');
+  } catch (err) {
+    console.error('Migration complaints error:', err.message);
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notifications (
       id VARCHAR(36) PRIMARY KEY,
@@ -957,6 +2004,49 @@ async function ensureTopUpTable() {
       INDEX idx_notifications_user_id (user_id)
     )
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mitra_booking_violations (
+      id VARCHAR(36) PRIMARY KEY,
+      booking_id VARCHAR(36) NOT NULL UNIQUE,
+      mitra_id VARCHAR(36) NOT NULL,
+      reason VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_mitra_violations_window (mitra_id, created_at)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mitra_sanctions (
+      mitra_id VARCHAR(36) PRIMARY KEY,
+      suspended_until DATETIME NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  for (const [column, definition] of [
+    ['mitra_response_deadline', 'DATETIME NULL'],
+    ['rejection_reason', 'TEXT NULL'],
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE bookings ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      if (!String(error.message || '').toLowerCase().includes('duplicate')) throw error;
+    }
+  }
+
+  for (const [column, definition] of [
+    ['attachment_type', 'VARCHAR(20) NULL'],
+    ['attachment_url', 'TEXT NULL'],
+    ['latitude', 'DECIMAL(10,7) NULL'],
+    ['longitude', 'DECIMAL(10,7) NULL'],
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE messages ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      if (!String(error.message || '').toLowerCase().includes('duplicate')) throw error;
+    }
+  }
 
   await removeDuplicateBookingWelcomeMessages();
 

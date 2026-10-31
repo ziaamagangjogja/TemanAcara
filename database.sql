@@ -65,9 +65,26 @@ CREATE TABLE bookings (
     transfer_amount DECIMAL(10,2),
     transfer_time VARCHAR(100),
     payment_split JSON,
+    mitra_response_deadline DATETIME,
+    rejection_reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     rating DECIMAL(2,1),
     rating_comment TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mitra_booking_violations (
+    id VARCHAR(36) PRIMARY KEY,
+    booking_id VARCHAR(36) NOT NULL UNIQUE,
+    mitra_id VARCHAR(36) NOT NULL,
+    reason VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_mitra_violations_window (mitra_id, created_at)
+);
+
+CREATE TABLE IF NOT EXISTS mitra_sanctions (
+    mitra_id VARCHAR(36) PRIMARY KEY,
+    suspended_until DATETIME NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
 CREATE TABLE chats (
@@ -87,6 +104,10 @@ CREATE TABLE messages (
     sender_type VARCHAR(50),
     message TEXT,
     status VARCHAR(50) DEFAULT 'sent',
+    attachment_type VARCHAR(20),
+    attachment_url TEXT,
+    latitude DECIMAL(10,7),
+    longitude DECIMAL(10,7),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -103,6 +124,9 @@ CREATE TABLE IF NOT EXISTS complaints (
     description TEXT NOT NULL,
     urgency VARCHAR(20) DEFAULT 'normal',
     status VARCHAR(20) DEFAULT 'pending',
+    proof_image LONGTEXT,
+    at_fault VARCHAR(20),
+    admin_notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_complaints_user_id (user_id),
@@ -120,3 +144,37 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_notifications_user_id (user_id)
 );
+
+CREATE TABLE IF NOT EXISTS topup_requests (
+    id VARCHAR(100) PRIMARY KEY,
+    user_id VARCHAR(36),
+    user_name VARCHAR(255),
+    user_email VARCHAR(255),
+    amount DECIMAL(10,2),
+    proof_image LONGTEXT,
+    status VARCHAR(50) DEFAULT 'pending',
+    admin_note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP NULL
+);
+
+CREATE TABLE IF NOT EXISTS withdrawal_requests (
+    id VARCHAR(100) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    user_name VARCHAR(255) NOT NULL,
+    user_email VARCHAR(255),
+    user_photo LONGTEXT,
+    role VARCHAR(20) DEFAULT 'user',
+    amount DECIMAL(10,2) NOT NULL,
+    bank_name VARCHAR(50) NOT NULL,
+    account_number VARCHAR(100) NOT NULL,
+    account_name VARCHAR(255) NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending',
+    proof_image LONGTEXT NULL,
+    admin_note TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP NULL,
+    INDEX idx_withdrawals_user (user_id),
+    INDEX idx_withdrawals_status (status)
+);
+

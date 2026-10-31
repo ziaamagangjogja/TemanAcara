@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Home, Users, Calendar, MessageCircle, User, Menu, X, HeartHandshake, Bell, LogOut } from "lucide-react";
+import { Home, Users, Calendar, MessageCircle, User, Menu, X, Heart, HeartHandshake, Bell, LogOut, Clock, CheckCircle2, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -11,10 +11,12 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogContent as AlertContent,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { getCurrentUser, subscribeToUser, UserProfile } from "@/lib/userStore";
 import { getBookings, subscribeToBookings } from "@/lib/bookingStore";
+import { getCurrentMitra, subscribeToMitraChanges } from "@/lib/mitraStore";
 import { useAppSettings } from "@/contexts/AppSettingsContext";
 
 const userNavItems = [
@@ -32,7 +34,22 @@ export function Navbar() {
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   const [activeBookingCount, setActiveBookingCount] = useState(0);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [mitra, setMitra] = useState<any>(() => getCurrentMitra());
   const { settings } = useAppSettings();
+
+  useEffect(() => {
+    const updateMitraState = () => {
+      setMitra(getCurrentMitra());
+    };
+    window.addEventListener("mitraLoggedIn", updateMitraState);
+    window.addEventListener("storage", updateMitraState);
+    const unsubMitra = subscribeToMitraChanges(updateMitraState);
+    return () => {
+      window.removeEventListener("mitraLoggedIn", updateMitraState);
+      window.removeEventListener("storage", updateMitraState);
+      unsubMitra();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -47,12 +64,19 @@ export function Navbar() {
     };
 
     void loadUser();
+    const refreshVisibleUser = () => {
+      if (document.visibilityState === "visible") void loadUser();
+    };
+    const userRefreshInterval = window.setInterval(refreshVisibleUser, 7000);
+    window.addEventListener("focus", refreshVisibleUser);
     const unsubscribe = subscribeToUser(() => {
       void loadUser();
     });
 
     return () => {
       mounted = false;
+      window.clearInterval(userRefreshInterval);
+      window.removeEventListener("focus", refreshVisibleUser);
       unsubscribe();
     };
   }, []);
@@ -115,7 +139,7 @@ export function Navbar() {
 
   return (
     <>
-      <nav className="hidden md:flex fixed top-0 left-0 right-0 z-50 bg-card/80 backdrop-blur-lg border-b shadow-sm">
+      <nav className="hidden md:flex fixed top-0 left-0 right-0 z-50 bg-[#FFF7F0]/90 backdrop-blur-md border-b border-orange-200/50 shadow-sm">
         <div className="container flex items-center justify-between h-16">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-10 h-10 bg-gradient-hero rounded-xl flex items-center justify-center shadow-orange">
@@ -169,12 +193,39 @@ export function Navbar() {
               </Link>
             )}
             {!isAuthPage && (
-              <Link to="/mitra">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <HeartHandshake className="w-4 h-4" />
-                  Jadi Mitra
-                </Button>
-              </Link>
+              <>
+                {mitra?.verificationStatus === "pending" ? (
+                  <Link to="/mitra/verification">
+                    <Button variant="outline" size="sm" className="gap-2 border-amber-300 bg-amber-50/70 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300">
+                      <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
+                      <span className="hidden sm:inline">Status Mitra (Ditinjau)</span>
+                      <span className="sm:hidden">Status Mitra</span>
+                    </Button>
+                  </Link>
+                ) : mitra?.verificationStatus === "approved" && !mitra?.isLegacyTalent && !mitra?.price_accepted ? (
+                  <Link to="/mitra/verification">
+                    <Button variant="outline" size="sm" className="gap-2 border-emerald-300 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span className="hidden sm:inline">Konfirmasi Tarif Mitra</span>
+                      <span className="sm:hidden">Tarif Mitra</span>
+                    </Button>
+                  </Link>
+                ) : mitra ? (
+                  <Link to="/mitra/dashboard">
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <LayoutDashboard className="w-4 h-4" />
+                      <span className="hidden sm:inline">Dashboard Mitra</span>
+                    </Button>
+                  </Link>
+                ) : (
+                  <Link to="/mitra" target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <HeartHandshake className="w-4 h-4" />
+                      Jadi Mitra
+                    </Button>
+                  </Link>
+                )}
+              </>
             )}
             {displayUser && !isAuthPage && (
               <Button variant="ghost" size="sm" className="gap-2" onClick={handleLogout}>
@@ -184,16 +235,14 @@ export function Navbar() {
             )}
             {!displayUser && !isAuthPage && (
               <Link to="/login">
-                <Button variant="hero" size="sm">
-                  Masuk
-                </Button>
+                <Button variant="hero" size="sm">Masuk</Button>
               </Link>
             )}
           </div>
         </div>
       </nav>
 
-      <nav className="md:hidden fixed top-0 left-0 right-0 z-50 bg-card/80 backdrop-blur-lg border-b shadow-sm">
+      <nav className="md:hidden fixed top-0 left-0 right-0 z-50 bg-[#FFF7F0]/90 backdrop-blur-md border-b border-orange-200/50 shadow-sm">
         <div className="flex items-center justify-between h-14 px-4">
           <Link to="/" className="flex items-center gap-2">
             <span className="font-bold text-lg text-foreground">RentMate</span>
@@ -204,7 +253,7 @@ export function Navbar() {
         </div>
 
         {mobileMenuOpen && (
-          <div className="absolute top-14 left-0 right-0 bg-card border-b shadow-lg animate-slide-up">
+          <div className="absolute top-14 left-0 right-0 bg-[#FFF7F0] border-b border-orange-200/50 shadow-lg animate-slide-up">
             <div className="p-4 space-y-2">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
@@ -238,12 +287,42 @@ export function Navbar() {
                 </Link>
               )}
               {!isAuthPage && (
-                <Link to="/mitra" onClick={() => setMobileMenuOpen(false)}>
-                  <div className="flex items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary">
-                    <HeartHandshake className="w-5 h-5" />
-                    <span className="font-medium">Jadi Mitra</span>
-                  </div>
-                </Link>
+                <>
+                  {mitra?.verificationStatus === "pending" ? (
+                    <Link to="/mitra/verification" onClick={() => setMobileMenuOpen(false)}>
+                      <div className="flex items-center gap-3 p-3 rounded-xl transition-colors bg-amber-50 text-amber-900 border border-amber-200">
+                        <Clock className="w-5 h-5 text-amber-600 animate-pulse" />
+                        <span className="font-medium">Status Pengajuan Mitra</span>
+                      </div>
+                    </Link>
+                  ) : mitra?.verificationStatus === "approved" && !mitra?.isLegacyTalent && !mitra?.price_accepted ? (
+                    <Link to="/mitra/verification" onClick={() => setMobileMenuOpen(false)}>
+                      <div className="flex items-center gap-3 p-3 rounded-xl transition-colors bg-emerald-50 text-emerald-900 border border-emerald-200">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <span className="font-medium">Konfirmasi Tarif Mitra</span>
+                      </div>
+                    </Link>
+                  ) : mitra ? (
+                    <Link to="/mitra/dashboard" onClick={() => setMobileMenuOpen(false)}>
+                      <div className="flex items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary">
+                        <LayoutDashboard className="w-5 h-5" />
+                        <span className="font-medium">Dashboard Mitra</span>
+                      </div>
+                    </Link>
+                  ) : (
+                    <Link
+                      to="/mitra"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setMobileMenuOpen(false)}
+                    >
+                      <div className="flex items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary">
+                        <HeartHandshake className="w-5 h-5" />
+                        <span className="font-medium">Jadi Mitra</span>
+                      </div>
+                    </Link>
+                  )}
+                </>
               )}
               {displayUser && !isAuthPage && (
                 <button type="button" onClick={() => { setMobileMenuOpen(false); handleLogout(); }} className="flex w-full items-center gap-3 p-3 rounded-xl transition-colors hover:bg-secondary text-left">
@@ -253,9 +332,7 @@ export function Navbar() {
               )}
               {!displayUser && !isAuthPage && (
                 <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
-                  <Button variant="hero" className="w-full mt-2">
-                    Masuk
-                  </Button>
+                  <Button variant="hero" className="w-full mt-2">Masuk</Button>
                 </Link>
               )}
             </div>

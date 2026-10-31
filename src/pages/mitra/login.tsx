@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { loginMitra, getCurrentMitra } from "@/lib/mitraStore";
+import { cleanupStorageQuota, saveCurrentMitraSession, safeGetLocalStorage } from "@/lib/storageHelper";
 
 export default function MitraLogin() {
   const navigate = useNavigate();
@@ -19,9 +20,10 @@ export default function MitraLogin() {
     password: "",
   });
 
-  // PERBAIKAN: Tambahkan pengecekan status login saat komponen dimuat
+  // PERBAIKAN: Bersihkan kuota dan cek status login saat komponen dimuat
   useEffect(() => {
-    const isMitraAuthenticated = localStorage.getItem("mitraAuthenticated");
+    cleanupStorageQuota();
+    const isMitraAuthenticated = safeGetLocalStorage("mitraAuthenticated");
     const currentMitra = getCurrentMitra();
     
     // Jika sudah login, arahkan ke dashboard
@@ -47,39 +49,53 @@ const handleLogin = async (e: React.FormEvent) => {
   setIsLoading(true);
 
   try {
+    cleanupStorageQuota();
+
     const loggedInMitra = await loginMitra({
       email: formData.email.trim().toLowerCase(),
       password: formData.password,
     });
 
-    // *** PERBAIKAN KRUSIAL: Cek status verifikasi sebelum melanjutkan ***
+    // Simpan sesi autentikasi mitra secara aman dengan penanganan batas kuota
+    saveCurrentMitraSession(loggedInMitra);
+
+    // Jika akun masih dalam antrean verifikasi
     if (loggedInMitra.verificationStatus === "pending") {
       toast({
-        title: "Akun Menunggu Verifikasi",
-        description: "Akun Anda sedang dalam proses verifikasi oleh admin. Silakan cek email Anda atau hubungi admin.",
-        variant: "destructive",
+        title: "Akun Menunggu Verifikasi ⏳",
+        description: "Mengarahkan ke halaman pantau status pengajuan Anda...",
       });
-      setIsLoading(false);
-      return; // *** HENTIKAN PROSES LOGIN DI SINI ***
+      setTimeout(() => {
+        navigate("/mitra/verification");
+      }, 300);
+      return;
     }
 
+    // Jika akun ditolak oleh admin
     if (loggedInMitra.verificationStatus === "rejected") {
       toast({
-        title: "Akun Ditolak",
-        description: "Pendaftaran Anda ditolak oleh admin. Silakan hubungi admin untuk informasi lebih lanjut.",
-        variant: "destructive",
+        title: "Status Pendaftaran: Belum Disetujui",
+        description: "Membuka catatan verifikasi dan opsi pengajuan ulang...",
       });
-      setIsLoading(false);
-      return; // *** HENTIKAN PROSES LOGIN DI SINI ***
+      setTimeout(() => {
+        navigate("/mitra/verification");
+      }, 300);
+      return;
     }
 
-    // Jika statusnya 'approved', lanjutkan proses login
-    localStorage.removeItem("rentmate_current_username");
-    localStorage.removeItem("rentmate_current_user");
-    localStorage.removeItem("mitraAuthenticated");
-    localStorage.setItem("mitraAuthenticated", "true");
-    localStorage.setItem("rentmate_current_mitra", JSON.stringify(loggedInMitra)); // Simpan data lengkap
+    // Jika statusnya 'approved' tapi belum menyetujui tarif yang ditentukan admin
+    if (loggedInMitra.verificationStatus === "approved" && !loggedInMitra.isLegacyTalent && !loggedInMitra.price_accepted) {
+      toast({
+        title: "Pendaftaran Disetujui! 🎉",
+        description: "Admin telah menetapkan tarif Anda. Silakan tinjau dan konfirmasi tarif.",
+      });
+      setTimeout(() => {
+        navigate("/mitra/verification");
+      }, 300);
+      return;
+    }
 
+    // Jika sudah disetujui dan tarif diterima (atau talent lama)
     toast({
       title: "Login Berhasil 🎉",
       description: "Selamat datang kembali!",

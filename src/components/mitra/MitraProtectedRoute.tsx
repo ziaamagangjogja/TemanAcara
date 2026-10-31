@@ -8,7 +8,9 @@ interface MitraProtectedRouteProps {
 
 export default function MitraProtectedRoute({ children }: MitraProtectedRouteProps) {
   // KUNCI YANG DIPERIKSA HARUS SAMA PERSIS SAAT LOGIN
-  const isMitraAuthenticated = sessionStorage.getItem('isMitraAuthenticated') === 'true';
+  const isMitraAuthenticated =
+    localStorage.getItem('mitraAuthenticated') === 'true' ||
+    sessionStorage.getItem('isMitraAuthenticated') === 'true';
 
   // JIKA BELUM LOGIN, ARAHKAN KE HALAMAN LOGIN
   if (!isMitraAuthenticated) {

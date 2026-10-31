@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Calendar, Clock, MapPin, MessageCircle, Star, ChevronRight, Lock, CheckCircle, Trash2, Activity } from "lucide-react";
+import { Calendar, Clock, MapPin, MessageCircle, Star, ChevronRight, Lock, CheckCircle, Trash2, Activity, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { talents } from "@/data/mockData";
 import { getBookings, refreshBookingsFromSupabase, SharedBooking, deleteBooking, isBookingOngoing } from "@/lib/bookingStore";
 import { getCurrentUser } from "@/lib/userStore";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
+import { SubmitComplaintModal } from "@/components/SubmitComplaintModal";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,13 +29,21 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-type BookingStatus = "pending_payment" | "pending_approval" | "approved" | "completed" | "cancelled" | "ongoing" | "expired";
+type BookingStatus = "pending_payment" | "pending_approval" | "pending_mitra" | "approved" | "completed" | "cancelled" | "ongoing" | "expired";
 
 export default function Bookings() {
   const [bookings, setBookings] = useState<SharedBooking[]>([]);
   const [allTalents, setAllTalents] = useState<any[]>(talents);
   const [isLoading, setIsLoading] = useState(true);
   const [ongoingBookings, setOngoingBookings] = useState<SharedBooking[]>([]);
+  const [complaintModal, setComplaintModal] = useState<{
+    isOpen: boolean;
+    bookingId: string;
+    talentName: string;
+    talentPhoto?: string;
+    bookingDate?: string;
+    bookingPurpose?: string;
+  }>({ isOpen: false, bookingId: "", talentName: "" });
 
   useEffect(() => {
     const fetchBookings = async () => {
@@ -209,6 +218,24 @@ export default function Bookings() {
                       Percakapan
                     </Button>
                   </Link>
+                )}
+                {(canChat || bookingStatus === "completed" || bookingStatus === "ongoing") && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 text-xs text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:border-rose-300 font-medium transition-colors"
+                    onClick={() => setComplaintModal({
+                      isOpen: true,
+                      bookingId: booking.id,
+                      talentName: talentName,
+                      talentPhoto: talentPhoto,
+                      bookingDate: booking.date,
+                      bookingPurpose: booking.purpose,
+                    })}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    Komplain
+                  </Button>
                 )}
                 {bookingStatus === "completed" && (
                   <Link to={`/booking/${booking.talentId}`}>
@@ -415,6 +442,17 @@ export default function Bookings() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Modal Ajukan Komplain Pelanggan */}
+      <SubmitComplaintModal
+        isOpen={complaintModal.isOpen}
+        onClose={() => setComplaintModal({ ...complaintModal, isOpen: false })}
+        bookingId={complaintModal.bookingId}
+        talentName={complaintModal.talentName}
+        talentPhoto={complaintModal.talentPhoto}
+        bookingDate={complaintModal.bookingDate}
+        bookingPurpose={complaintModal.bookingPurpose}
+      />
     </div>
   );
 }

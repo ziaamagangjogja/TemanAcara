@@ -19,6 +19,24 @@ if (typeof window !== 'undefined') void refreshTalentPhotoMap();
 
 export type MessageStatus = "sent" | "delivered" | "read";
 
+export type ChatAttachment =
+  | { type: "image"; url: string }
+  | { type: "location"; latitude: number; longitude: number };
+
+export async function uploadChatImage(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) throw new Error("Pilih file gambar untuk dikirim.");
+  if (file.size > 8 * 1024 * 1024) throw new Error("Ukuran gambar maksimal 8 MB.");
+
+  const body = new FormData();
+  body.append("file", file, file.name);
+  const response = await fetch("/api/upload", { method: "POST", body });
+  const result = await response.json().catch(() => null);
+  if (!response.ok || !result?.url) {
+    throw new Error(result?.message || "Gambar gagal diunggah.");
+  }
+  return result.url;
+}
+
 // Server MySQL memakai opsi `dateStrings: true`, sehingga kolom DATETIME
 // dikembalikan sebagai string tanpa info timezone, contoh: "2026-09-19 06:22:00".
 // String tersebut sebenarnya waktu UTC. `new Date("2026-09-19 06:22:00")` di
@@ -41,6 +59,7 @@ export interface ChatMessage {
   senderId: string;
   senderType: "user" | "talent" | "mitra-as-booker";
   message: string;
+  attachment?: ChatAttachment;
   timestamp: string;
   status: MessageStatus;
   readByUser: boolean;
@@ -115,6 +134,7 @@ function persistChatsToStorage(chats: ChatSession[]) {
 }
 
 let cachedChats: ChatSession[] = loadChatsFromStorage();
+const deletedMessageIds = new Set<string>();
 
 function ensureChatsFresh() {
   void fetchChatsFromSupabase();
@@ -164,6 +184,11 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
         senderId: m.sender_id,
         senderType: m.sender_type as "user" | "talent" | "mitra-as-booker",
         message: m.message,
+        attachment: m.attachment_type === "image" && m.attachment_url
+          ? { type: "image", url: m.attachment_url }
+          : m.attachment_type === "location" && Number.isFinite(Number(m.latitude)) && Number.isFinite(Number(m.longitude))
+            ? { type: "location", latitude: Number(m.latitude), longitude: Number(m.longitude) }
+            : undefined,
         // created_at dari MySQL (UTC, tanpa timezone) -> normalkan agar di-parse UTC.
         timestamp: parseServerDate(m.created_at).toISOString(),
         status: (m.status as MessageStatus) || "sent",
@@ -175,10 +200,11 @@ export async function fetchChatsFromSupabase(): Promise<ChatSession[]> {
           (m.sender_type === "talent" && m.message.startsWith("Halo! Terima kasih sudah booking untuk ")),
       }));
 
-      // Gabungkan dengan pesan lokal yang belum tersimpan ke DB
+      // Gabungkan dengan pesan lokal yang belum tersimpan ke DB (kecuali yang sengaja dihapus)
       const existingLocal = existing?.messages || [];
       const pendingLocal = existingLocal.filter(
-        (lm) => !dbMessages.some((dm) => dm.id === lm.id) &&
+        (lm) => !deletedMessageIds.has(lm.id) &&
+          !dbMessages.some((dm) => dm.id === lm.id) &&
           !dbMessages.some(
             (dm) =>
               dm.message === lm.message &&
@@ -267,7 +293,7 @@ async function saveMessageToSupabase(
     const chatData = await chatRes.json();
     const chatId = chatData.id;
 
-    await fetch('/api/messages', {
+    const messageRes = await fetch('/api/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -278,9 +304,14 @@ async function saveMessageToSupabase(
         message: newMessage.message,
         is_auto_response: newMessage.isAutoResponse === true,
         status: newMessage.status,
-        created_at: newMessage.timestamp
+        created_at: newMessage.timestamp,
+        attachment_type: newMessage.attachment?.type || null,
+        attachment_url: newMessage.attachment?.type === "image" ? newMessage.attachment.url : null,
+        latitude: newMessage.attachment?.type === "location" ? newMessage.attachment.latitude : null,
+        longitude: newMessage.attachment?.type === "location" ? newMessage.attachment.longitude : null,
       })
     });
+    if (!messageRes.ok) throw new Error("Pesan gagal disimpan ke server.");
 
     // --- Step 3: Refresh cache dan broadcast ---
     await fetchChatsFromSupabase();
@@ -411,7 +442,7 @@ export function getChatSessionsForMitraAsBooker(mitraId: string): ChatSession[] 
 // ============================================================
 // 6. sendMitraMessage
 // ============================================================
-export function sendMitraMessage(bookingId: string, message: string) {
+export function sendMitraMessage(bookingId: string, message: string, attachment?: ChatAttachment) {
   let session = cachedChats.find((s) => s.bookingId === bookingId);
   if (!session) {
     const booking = getBookings().find((b) => b.id === bookingId);
@@ -424,7 +455,8 @@ export function sendMitraMessage(bookingId: string, message: string) {
     id: crypto.randomUUID(),
     senderId: session.talentId,
     senderType: "talent",
-    message,
+    message: message.trim() || (attachment?.type === "image" ? "Mengirim foto" : attachment?.type === "location" ? "Mengirim lokasi" : ""),
+    attachment,
     timestamp: now,
     status: "sent",
     readByUser: false,
@@ -460,7 +492,8 @@ export function sendUserMessage(
   userId: string,
   message: string,
   bookingId: string,
-  senderType?: "user" | "talent" | "mitra-as-booker"
+  senderType?: "user" | "talent" | "mitra-as-booker",
+  attachment?: ChatAttachment
 ) {
   let session = cachedChats.find((s) => s.bookingId === bookingId);
   if (!session) {
@@ -476,7 +509,8 @@ export function sendUserMessage(
     id: crypto.randomUUID(),
     senderId: userId,
     senderType: finalSenderType,
-    message,
+    message: message.trim() || (attachment?.type === "image" ? "Mengirim foto" : attachment?.type === "location" ? "Mengirim lokasi" : ""),
+    attachment,
     timestamp: now,
     status: "sent",
     readByUser: finalSenderType === "user" || finalSenderType === "mitra-as-booker",
@@ -598,4 +632,81 @@ export function getActiveChatSessions(): ChatSession[] {
 export function getChatSessionsByMitraId(mitraId: string): ChatSession[] {
   if (!mitraId) return [];
   return cachedChats.filter((s) => s.talentId === mitraId);
+}
+
+// ============================================================
+// 11. Hapus Pesan (Delete for Me & Delete for Everyone)
+// ============================================================
+export function getDeletedForMeMessageIds(userId: string): string[] {
+  if (typeof window === "undefined" || !userId) return [];
+  try {
+    return JSON.parse(localStorage.getItem(`rentmate_deleted_for_me_${userId}`) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+export function isMessageDeletedForMe(userId: string, messageId: string): boolean {
+  if (!userId || !messageId) return false;
+  const deletedIds = getDeletedForMeMessageIds(userId);
+  return deletedIds.includes(messageId);
+}
+
+function notifyListeners() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("chatsUpdated"));
+  }
+}
+
+export function deleteMessageForMe(userId: string, bookingId: string, messageId: string) {
+  if (typeof window !== "undefined" && userId) {
+    const key = `rentmate_deleted_for_me_${userId}`;
+    const current: string[] = getDeletedForMeMessageIds(userId);
+    if (!current.includes(messageId)) {
+      current.push(messageId);
+      localStorage.setItem(key, JSON.stringify(current));
+    }
+  }
+
+  deletedMessageIds.add(messageId);
+
+  // Hapus dari cache sesi lokal
+  const session = cachedChats.find((s) => s.bookingId === bookingId);
+  if (session) {
+    session.messages = session.messages.filter((m) => m.id !== messageId);
+    if (session.messages.length > 0) {
+      const last = session.messages[session.messages.length - 1];
+      session.lastMessage = last.message || (last.attachment ? "Lampiran" : "");
+      session.lastMessageTime = last.timestamp;
+    } else {
+      session.lastMessage = "";
+    }
+  }
+  notifyListeners();
+}
+
+export async function deleteMessageForEveryone(bookingId: string, messageId: string): Promise<boolean> {
+  deletedMessageIds.add(messageId);
+
+  // Hapus dari server backend (MySQL)
+  try {
+    await fetch(`/api/messages/${messageId}`, { method: "DELETE" });
+  } catch (err) {
+    console.error("Gagal menghapus pesan di server:", err);
+  }
+
+  // Hapus dari cache sesi lokal
+  const session = cachedChats.find((s) => s.bookingId === bookingId);
+  if (session) {
+    session.messages = session.messages.filter((m) => m.id !== messageId);
+    if (session.messages.length > 0) {
+      const last = session.messages[session.messages.length - 1];
+      session.lastMessage = last.message || (last.attachment ? "Lampiran" : "");
+      session.lastMessageTime = last.timestamp;
+    } else {
+      session.lastMessage = "";
+    }
+  }
+  notifyListeners();
+  return true;
 }

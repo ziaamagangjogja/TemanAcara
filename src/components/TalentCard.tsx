@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Talent } from "@/data/mockData";
-import { getBookings } from "@/lib/bookingStore";
+import { getBookings, getTalentReviewStats } from "@/lib/bookingStore";
 
 interface TalentCardProps {
   talent: Talent;
@@ -70,12 +70,7 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
 
   const displayedSkills = (talent.skills || []).slice(0, 3);
 
-  const bookings = getBookings();
-  const ratedBookings = bookings.filter((b: any) => (b.talentId === talent.id || b.talentId === talent.talentId) && typeof b.rating === "number" && b.rating > 0);
-  const talentReviewCount = ratedBookings.length;
-  const talentRating = talentReviewCount > 0 
-    ? (ratedBookings.reduce((sum: number, b: any) => sum + Number(b.rating), 0) / talentReviewCount).toFixed(1) 
-    : "0.0";
+  const { reviewCount: talentReviewCount, formattedRating: talentRating } = getTalentReviewStats(talent);
 
   return (
     <Card hover className="overflow-hidden group">

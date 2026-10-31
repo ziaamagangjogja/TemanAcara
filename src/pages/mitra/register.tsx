@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2 } from "lucide-react";
+import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2, Info } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { registerMitra } from "@/lib/mitraStore";
 import { getCurrentUser } from "@/lib/userStore";
 import { talents } from "@/data/mockData";
+import { saveCurrentMitraSession } from "@/lib/storageHelper";
 
 const categories = [
   "Travelling", "Nonton Film", "Kuliner", "Fotografi", "Gaming",
@@ -21,6 +22,32 @@ const categories = [
   "Badminton", "Sepak Bola", "Karaoke", "Belanja", "Kopi",
   "Podcast", "Lainnya"
 ];
+
+const SERVICE_TYPE_DETAILS: Record<string, {
+  title: string;
+  description: string;
+  examples: string;
+  suggestedPrice: string;
+}> = {
+  kasual: {
+    title: "Teman Kasual & Santai",
+    description: "Fokus pada aktivitas santai sehari-hari untuk teman ngobrol, eksplorasi kuliner, ngopi di kafe, nonton film di bioskop, atau jalan-jalan santai di mall/taman kota.",
+    examples: "Teman ngopi, kulineran, nonton bioskop, shopping buddy, jalan santai.",
+    suggestedPrice: "Rp 200.000 - Rp 250.000",
+  },
+  acara: {
+    title: "Pendamping Acara & Sosial",
+    description: "Menemani klien menghadiri acara semi-formal atau perayaan sosial agar klien memiliki partner yang nyaman, percaya diri, dan sopan di depan umum.",
+    examples: "Kondangan pernikahan, partner wisuda, gathering kantor, reuni keluarga/teman, pesta.",
+    suggestedPrice: "Rp 250.000 - Rp 350.000",
+  },
+  spesialis: {
+    title: "Keahlian Khusus & Spesialis",
+    description: "Layanan berbasis keahlian spesifik yang Anda kuasai, membutuhkan keterampilan praktis khusus untuk memandu atau mendampingi klien.",
+    examples: "Pemandu wisata/tour guide lokal, fotografer hunting foto, partner olahraga/gym, mabar game.",
+    suggestedPrice: "Rp 350.000 - Rp 450.000",
+  },
+};
 
 export default function MitraRegister() {
   const navigate = useNavigate();
@@ -45,6 +72,9 @@ export default function MitraRegister() {
     description: "",
     ktpLink: "", // Hanya KTP yang menggunakan link Google Drive
     age: "", // Tambahkan field umur
+    experienceLevel: "acara",
+    priceExpectation: "Rp 250.000 - Rp 350.000",
+    socialMedia: "",
   });
 
   useEffect(() => {
@@ -108,11 +138,12 @@ export default function MitraRegister() {
     setSelectedCategories(prev => prev.filter(c => c !== category));
   };
 
-  // Fungsi untuk memvalidasi format link Google Drive
+  // Fungsi untuk memvalidasi format link Google Drive atau link dokumen
   const isValidGDriveLink = (link: string) => {
     return (
-      link.includes("drive.google.com/file/d/") ||
-      link.includes("drive.google.com/open?id=")
+      link.includes("drive.google.com") ||
+      link.startsWith("http://") ||
+      link.startsWith("https://")
     );
   };
 
@@ -162,14 +193,9 @@ export default function MitraRegister() {
       return;
     }
 
-    if (!profileImagePreview) {
-      toast({
-        title: "Registrasi Gagal",
-        description: "Foto profil wajib diunggah",
-        variant: "destructive",
-      });
-      return;
-    }
+    const finalPhoto =
+      profileImagePreview ||
+      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400";
 
     if (!formData.ktpLink) {
       toast({
@@ -219,22 +245,44 @@ export default function MitraRegister() {
         address: formData.address,
         description: formData.description,
         category: selectedCategories.join(", "),
-        photo: profileImagePreview, // Simpan foto profil sebagai base64
+        photo: finalPhoto, // Simpan foto profil
         ktp: formData.ktpLink, // Simpan KTP sebagai link Google Drive
         age: parseInt(formData.age), // Tambahkan umur
-        // Harga tidak disertakan karena akan ditentukan oleh admin
+        experience_level: formData.experienceLevel,
+        price_expectation: formData.priceExpectation,
+        social_media: formData.socialMedia,
+        // Harga tidak disertakan karena akan ditentukan secara objektif oleh admin
       });
 
-      // Bersihkan sesi mitra lama agar tidak otomatis diarahkan ke dashboard mitra
-      localStorage.removeItem("mitraAuthenticated");
-      localStorage.removeItem("rentmate_current_mitra");
+      // Simpan sesi calon mitra yang baru mendaftar agar langsung bisa memantau status
+      const candidateSession = {
+        id: formData.email,
+        talentId: formData.email,
+        name: formData.name,
+        full_name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        address: formData.address,
+        description: formData.description,
+        category: selectedCategories.join(", "),
+        photo: finalPhoto,
+        age: parseInt(formData.age),
+        experience_level: formData.experienceLevel,
+        price_expectation: formData.priceExpectation,
+        social_media: formData.socialMedia,
+        status: "pending",
+        verificationStatus: "pending",
+        isVerified: false,
+      };
+      saveCurrentMitraSession(candidateSession);
+      window.dispatchEvent(new CustomEvent("mitraLoggedIn", { detail: { user: candidateSession } }));
 
       toast({
-        title: "Registrasi Berhasil 🎉",
-        description: "Akun Anda telah dibuat dan sedang menunggu verifikasi admin. Anda akan menerima email dalam 1x24 jam.",
+        title: "Pendaftaran Berhasil 🎉",
+        description: "Akun calon mitra Anda telah dibuat dan sedang dalam proses verifikasi admin.",
       });
 
-      // Tampilkan halaman sukses, bukan langsung login/redirect
+      // Tampilkan halaman sukses
       setIsSuccess(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err: any) {
@@ -251,22 +299,52 @@ export default function MitraRegister() {
   if (isSuccess) {
     return (
       <div className="min-h-screen bg-gradient-warm flex items-center justify-center p-4">
-        <Card className="w-full max-w-md p-8 text-center">
+        <Card className="w-full max-w-md p-8 text-center shadow-xl border-primary/20">
           <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <CheckCircle2 className="w-8 h-8 text-green-600" />
           </div>
-          <h1 className="text-2xl font-bold mb-2">Pendaftaran Berhasil 🎉</h1>
-          <p className="text-muted-foreground text-sm mb-6">
-            Akun Anda sudah terkirim dan sedang menunggu verifikasi admin (maksimal 1x24 jam).
-            Harga akan ditentukan oleh admin setelah verifikasi disetujui.
+          <h1 className="text-2xl font-bold mb-2">Pendaftaran Berhasil! 🎉</h1>
+          <p className="text-muted-foreground text-sm mb-4">
+            Berkas pendaftaran Anda telah tersimpan dan sedang dalam antrean verifikasi admin (maksimal 1x24 jam).
           </p>
 
-          <div className="space-y-2">
-            <Button className="w-full" onClick={() => navigate("/")}>
-              Kembali ke Beranda
+          {/* Preview Profil Singkat */}
+          <div className="bg-muted/40 rounded-xl p-4 mb-6 border border-border/60 text-left flex items-center gap-3">
+            {profileImagePreview ? (
+              <img
+                src={profileImagePreview}
+                alt={formData.name}
+                className="w-14 h-14 rounded-full object-cover border-2 border-primary/40 shrink-0"
+              />
+            ) : (
+              <div className="w-14 h-14 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center shrink-0">
+                {formData.name.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <h2 className="font-semibold text-sm truncate">{formData.name}</h2>
+              <p className="text-xs text-muted-foreground truncate">{formData.email}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[10px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-400 px-2 py-0.5 rounded-full">
+                  Status: Menunggu Kurasi Admin
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <Button
+              className="w-full gap-2 font-semibold shadow-md shadow-primary/20"
+              onClick={() => navigate("/mitra/verification")}
+            >
+              Pantau Status Pengajuan Saya ➔
             </Button>
-            <Button variant="outline" className="w-full" onClick={() => navigate("/mitra/login")}>
-              Ke Halaman Login Talent
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => navigate("/")}
+            >
+              Kembali ke Beranda
             </Button>
           </div>
         </Card>
@@ -407,8 +485,8 @@ export default function MitraRegister() {
             <h2 className="text-lg font-semibold border-b pb-2">Informasi Talent</h2>
             
             <div className="space-y-2">
-              <Label>Hobi Talent (Pilih satu atau lebih)</Label>
-              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
+              <Label>Keahlian & Hobi (Pilih satu atau lebih)</Label>
+              <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto p-2 border rounded-md">
                 {categories.map((category) => (
                   <div key={category} className="flex items-center space-x-2">
                     <Checkbox
@@ -424,9 +502,9 @@ export default function MitraRegister() {
               </div>
               
               {selectedCategories.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-2">
+                <div className="flex flex-wrap gap-1 mt-1">
                   {selectedCategories.map((category) => (
-                    <Badge key={category} variant="secondary" className="gap-1 pr-1">
+                    <Badge key={category} variant="secondary" className="gap-1 pr-1 text-xs">
                       {category}
                       <button
                         type="button"
@@ -441,18 +519,101 @@ export default function MitraRegister() {
               )}
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <Label htmlFor="description">Deskripsi Diri</Label>
               <Textarea
                 id="description"
-                placeholder="Ceritakan tentang diri Anda"
+                placeholder="Ceritakan tentang diri Anda, hobi, dan kepribadian yang membuat orang nyaman ditemani"
                 value={formData.description}
                 onChange={(e) => handleInputChange("description", e.target.value)}
                 rows={3}
               />
             </div>
 
-            {/* Field harga dihapus karena akan ditentukan oleh admin */}
+            {/* Tipe Layanan Utama */}
+            <div className="space-y-2">
+              <Label className="font-medium text-sm">Tipe Layanan Utama</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: "kasual", title: "Kasual & Santai" },
+                  { id: "acara", title: "Acara & Sosial" },
+                  { id: "spesialis", title: "Spesialis / Pro" },
+                ].map((tier) => (
+                  <button
+                    key={tier.id}
+                    type="button"
+                    onClick={() => {
+                      handleInputChange("experienceLevel", tier.id);
+                      const detail = SERVICE_TYPE_DETAILS[tier.id];
+                      if (detail) {
+                        handleInputChange("priceExpectation", detail.suggestedPrice);
+                      }
+                    }}
+                    className={`py-2 px-2 rounded-lg border text-xs font-medium text-center transition-all ${
+                      formData.experienceLevel === tier.id
+                        ? "border-orange-500 bg-orange-50 text-orange-600 font-semibold ring-1 ring-orange-500 shadow-xs"
+                        : "border-border hover:bg-muted/50 text-muted-foreground bg-card"
+                    }`}
+                  >
+                    {tier.title}
+                  </button>
+                ))}
+              </div>
+
+              {/* Penjelasan Detail Tipe Layanan yang Dipilih */}
+              {SERVICE_TYPE_DETAILS[formData.experienceLevel] && (
+                <div className="p-3 bg-orange-50/70 border border-orange-200/90 rounded-xl text-xs space-y-1.5 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-orange-950 flex items-center gap-1.5">
+                      <Info className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                      {SERVICE_TYPE_DETAILS[formData.experienceLevel].title}
+                    </span>
+                    <span className="text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-2 py-0.5 rounded-full border border-orange-200/60">
+                      Rekomendasi: {SERVICE_TYPE_DETAILS[formData.experienceLevel].suggestedPrice}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground text-xs leading-relaxed">
+                    {SERVICE_TYPE_DETAILS[formData.experienceLevel].description}
+                  </p>
+                  <div className="pt-1.5 border-t border-orange-200/60 flex items-start gap-1 text-[11px] text-orange-900/90">
+                    <span className="font-semibold shrink-0">Contoh Kegiatan:</span>
+                    <span className="italic">{SERVICE_TYPE_DETAILS[formData.experienceLevel].examples}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Ekspektasi Tarif */}
+            <div className="space-y-1.5">
+              <Label htmlFor="priceExpectation" className="font-medium text-sm">
+                Ekspektasi Tarif per Jam
+              </Label>
+              <select
+                id="priceExpectation"
+                value={formData.priceExpectation}
+                onChange={(e) => handleInputChange("priceExpectation", e.target.value)}
+                className="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-1 focus:ring-orange-500"
+              >
+                <option value="Rp 200.000 - Rp 250.000">Rp 200.000 - Rp 250.000 / jam (Kasual)</option>
+                <option value="Rp 250.000 - Rp 350.000">Rp 250.000 - Rp 350.000 / jam (Rekomendasi)</option>
+                <option value="Rp 350.000 - Rp 450.000">Rp 350.000 - Rp 450.000 / jam (Spesialis)</option>
+                <option value="> Rp 450.000">&gt; Rp 450.000 / jam (VIP)</option>
+              </select>
+            </div>
+
+            {/* Akun Media Sosial / Portofolio */}
+            <div className="space-y-1.5">
+              <Label htmlFor="socialMedia" className="font-medium text-sm">
+                Akun Media Sosial / Portofolio <span className="text-muted-foreground font-normal text-xs">(Opsional)</span>
+              </Label>
+              <Input
+                id="socialMedia"
+                placeholder="Contoh: @instagram atau link portofolio"
+                value={formData.socialMedia}
+                onChange={(e) => handleInputChange("socialMedia", e.target.value)}
+                className="rounded-lg text-sm"
+              />
+            </div>
           </div>
 
           {/* Upload Dokumen Section */}
@@ -463,12 +624,12 @@ export default function MitraRegister() {
             <div className="space-y-2">
               <Label htmlFor="profilePhoto">Foto Profil</Label>
               <div className="flex items-center space-x-4">
-                <div className="w-20 h-20 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
+                <div className="w-20 h-20 rounded-2xl bg-gray-100 border flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
                   {profileImagePreview ? (
                     <img 
                       src={profileImagePreview} 
                       alt="Profile Preview" 
-                      className="w-full h-full object-cover" 
+                      className="w-full h-full object-cover object-top" 
                     />
                   ) : (
                     <UserPlus className="w-8 h-8 text-gray-400" />
@@ -493,7 +654,7 @@ export default function MitraRegister() {
                     Pilih Foto
                   </Button>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Format: JPG, PNG. Maksimal: 5MB
+                    Format: JPG, PNG. Maks: 5MB. Disarankan foto portrait tegak agar wajah pas & tidak terpotong.
                   </p>
                 </div>
               </div>

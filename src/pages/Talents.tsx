@@ -1,11 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { SlidersHorizontal, Search, ArrowUpDown, X } from "lucide-react";
+import { SlidersHorizontal, Search, ArrowUpDown, X, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { TalentCard } from "@/components/TalentCard";
 import { FilterModal } from "@/components/FilterModal";
-import { getAllVerifiedTalents, getCurrentMitra } from "@/lib/mitraStore";
+import { getAllVerifiedTalents } from "@/lib/mitraStore";
+import { getTalentReviewStats } from "@/lib/bookingStore";
+import { getCurrentUser } from "@/lib/userStore";
 import {
   Select,
   SelectContent,
@@ -16,7 +18,8 @@ import {
 
 export default function Talents() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState("rating");
+  const [sortBy, setSortBy] = useState("random");
+  const [randomOrderMap, setRandomOrderMap] = useState<Record<string, number>>({});
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [filters, setFilters] = useState({
     cities: [] as string[],
@@ -27,8 +30,29 @@ export default function Talents() {
     availability: [] as string[], // Tambahkan properti availability
   });
 
-  const [currentMitra, setCurrentMitra] = useState<any>(null);
-  
+  // State pengguna aktif yang sedang login untuk mencegah booking diri sendiri
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    try {
+      const raw = localStorage.getItem("rentmate_current_user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    getCurrentUser().then((u) => {
+      if (u) setCurrentUser(u);
+    });
+    const handleUserUpdated = () => {
+      getCurrentUser().then((u) => {
+        if (u) setCurrentUser(u);
+      });
+    };
+    window.addEventListener("userUpdated", handleUserUpdated);
+    return () => window.removeEventListener("userUpdated", handleUserUpdated);
+  }, []);
+
   const [allTalents, setAllTalents] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true); // Tambahkan loading state
@@ -52,7 +76,15 @@ export default function Talents() {
     setIsLoading(true);
     try {
       const data = await getAllVerifiedTalents();
-      setAllTalents(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setAllTalents(list);
+
+      // Buat bobot acak stabil untuk rekomendasi acak sehingga urutan teman teracak merata
+      const initialMap: Record<string, number> = {};
+      list.forEach((t: any) => {
+        initialMap[t.id] = Math.random();
+      });
+      setRandomOrderMap(initialMap);
     } catch (err: any) {
       console.error("Gagal memuat data talent:", err);
       setError(err.message || "Terjadi kesalahan saat memuat data.");
@@ -62,6 +94,15 @@ export default function Talents() {
       setIsInitialLoad(false); // Tandai bahwa load awal sudah selesai
     }
   }, []);
+
+  const handleReshuffle = useCallback(() => {
+    const newMap: Record<string, number> = {};
+    allTalents.forEach((t) => {
+      newMap[t.id] = Math.random();
+    });
+    setRandomOrderMap(newMap);
+    setSortBy("random");
+  }, [allTalents]);
 
   // 🔥 PERBAIKAN: Gunakan satu useEffect yang lebih efisien
   useEffect(() => {
@@ -97,11 +138,6 @@ export default function Talents() {
     };
   }, [loadTalents]);
 
-  // 🔥 PERBAIKAN: TAMBAKAN useEffect untuk memeriksa apakah user adalah mitra
-  useEffect(() => {
-    const mitra = getCurrentMitra();
-    setCurrentMitra(mitra);
-  }, []);
 
   // 🔥 PERBAIKAN: Track kapan user melakukan pencarian
   useEffect(() => {
@@ -128,9 +164,30 @@ export default function Talents() {
     // 🔥 PERBAIKAN KRUSIAL: Filter untuk mengecualikan talent yang diblokir admin
     result = result.filter((t) => !t.isBlocked && !t.blocked && t.status !== "blocked" && !blockedTalents.includes(t.id));
     
-    // 🔥 PERBAIKAN: Jika currentMitra ada, filter untuk mengecualikan diri sendiri
-    if (currentMitra) {
-      result = result.filter((t) => t.id !== currentMitra.id);
+    // 🔥 Pengecualian profil diri sendiri: Pengguna tidak bisa melihat/mem-booking akun dirinya sendiri
+    if (currentUser) {
+      const userEmail = (currentUser.email || "").trim().toLowerCase();
+      const userName = (currentUser.username || currentUser.name || "").trim().toLowerCase();
+      const userId = currentUser.id || "";
+
+      result = result.filter((t) => {
+        // Cek ID pengguna yang sama
+        if (userId && (t.id === userId || t.talentId === userId)) {
+          return false;
+        }
+        // Cek Email yang sama (apabila akun pengguna mendaftar sebagai mitra dengan email yang sama)
+        if (userEmail && t.email && t.email.trim().toLowerCase() === userEmail) {
+          return false;
+        }
+        // Cek Username / Nama Akun yang persis sama
+        if (userName && (
+          (t.username && t.username.trim().toLowerCase() === userName) ||
+          (t.name && t.name.trim().toLowerCase() === userName)
+        )) {
+          return false;
+        }
+        return true;
+      });
     }
 
     if (searchQuery.trim()) {
@@ -201,8 +258,19 @@ export default function Talents() {
     });
 
     switch (sortBy) {
+      case "random":
+        result.sort((a, b) => (randomOrderMap[a.id] ?? 0.5) - (randomOrderMap[b.id] ?? 0.5));
+        break;
       case "rating":
-        result.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+        result.sort((a, b) => {
+          const rateA = getTalentReviewStats(a).rating;
+          const rateB = getTalentReviewStats(b).rating;
+          if (rateB !== rateA) return rateB - rateA;
+          const revA = getTalentReviewStats(a).reviewCount;
+          const revB = getTalentReviewStats(b).reviewCount;
+          if (revB !== revA) return revB - revA;
+          return (a.name || "").localeCompare(b.name || "");
+        });
         break;
       case "price-low":
         result.sort((a, b) => (a.price || a.pricePerHour || 0) - (b.price || b.pricePerHour || 0));
@@ -211,12 +279,20 @@ export default function Talents() {
         result.sort((a, b) => (b.price || b.pricePerHour || 0) - (a.price || a.pricePerHour || 0));
         break;
       case "reviews":
-        result.sort((a, b) => (b.reviewCount || 0) - (a.reviewCount || 0));
+        result.sort((a, b) => {
+          const revA = getTalentReviewStats(a).reviewCount;
+          const revB = getTalentReviewStats(b).reviewCount;
+          if (revB !== revA) return revB - revA;
+          const rateA = getTalentReviewStats(a).rating;
+          const rateB = getTalentReviewStats(b).rating;
+          if (rateB !== rateA) return rateB - rateA;
+          return (a.name || "").localeCompare(b.name || "");
+        });
         break;
     }
 
     return result;
-  }, [searchQuery, filters, sortBy, allTalents, error, currentMitra, blockedTalents]); // 🔥 PERBAIKAN: Tambahkan blockedTalents ke dependency
+  }, [searchQuery, filters, sortBy, allTalents, error, blockedTalents, randomOrderMap, currentUser]);
 
   const activeFiltersCount =
     filters.cities.length +
@@ -263,7 +339,7 @@ export default function Talents() {
             />
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex gap-2 sm:gap-3 flex-wrap">
             <Button
               variant={activeFiltersCount > 0 ? "default" : "outline"}
               className="gap-2 h-12"
@@ -278,12 +354,23 @@ export default function Talents() {
               )}
             </Button>
 
+            <Button
+              variant="outline"
+              className="h-12 px-3 gap-1.5 text-muted-foreground hover:text-foreground"
+              title="Acak ulang urutan rekomendasi teman"
+              onClick={handleReshuffle}
+            >
+              <Shuffle className="w-4 h-4 text-orange-500" />
+              <span className="hidden sm:inline text-xs font-medium">Acak Teman</span>
+            </Button>
+
             <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-[180px] h-12">
+              <SelectTrigger className="w-[195px] h-12">
                 <ArrowUpDown className="w-4 h-4 mr-2" />
                 <SelectValue placeholder="Urutkan" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="random">Rekomendasi (Acak)</SelectItem>
                 <SelectItem value="rating">Penilaian Tertinggi</SelectItem>
                 <SelectItem value="price-low">Harga Terendah</SelectItem>
                 <SelectItem value="price-high">Harga Tertinggi</SelectItem>

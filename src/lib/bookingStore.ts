@@ -26,6 +26,8 @@ export interface SharedBooking {
   paymentMethod?: "qris" | "bca" | "bri" | "mandiri" | "saldo";
   paymentCode?: string;
   paymentProof?: string;
+  rejectionReason?: string;
+  mitraResponseDeadline?: string;
   transferAmount?: number;
   transferTime?: string;
 
@@ -45,6 +47,7 @@ export interface SharedBooking {
   // OPTIONAL: helper fields from app context (not from Supabase)
   talentName?: string;
   talentPhoto?: string;
+  talentCity?: string;
   userName?: string;
   userPhoto?: string;
   bookerType?: "user" | "mitra";
@@ -141,6 +144,8 @@ async function fetchBookingsFromSupabase(): Promise<SharedBooking[]> {
         paymentMethod: item.payment_method,
         paymentCode: item.payment_code,
         paymentProof: item.payment_proof,
+        rejectionReason: item.rejection_reason || "",
+        mitraResponseDeadline: item.mitra_response_deadline || undefined,
         transferAmount: item.transfer_amount,
         transferTime: item.transfer_time,
         paymentSplit: item.payment_split,
@@ -185,46 +190,52 @@ export function getBookingById(id: string): SharedBooking | undefined {
   return cachedBookings.find(b => b.id === id);
 }
 
+export function getTalentReviewStats(talentIdOrObj: string | { id?: string; talentId?: string } | null | undefined): { reviewCount: number; rating: number; formattedRating: string } {
+  const bookings = getBookings();
+  const targetId = typeof talentIdOrObj === "string"
+    ? talentIdOrObj
+    : (talentIdOrObj?.id || talentIdOrObj?.talentId || "");
+
+  if (!targetId) {
+    return { reviewCount: 0, rating: 0, formattedRating: "0.0" };
+  }
+
+  const extraId = typeof talentIdOrObj === "object" ? (talentIdOrObj?.talentId || talentIdOrObj?.id) : undefined;
+
+  const ratedBookings = bookings.filter(
+    (b: any) =>
+      (b.talentId === targetId || (extraId && b.talentId === extraId)) &&
+      typeof b.rating === "number" &&
+      b.rating > 0
+  );
+
+  const reviewCount = ratedBookings.length;
+  const rating = reviewCount > 0
+    ? Number((ratedBookings.reduce((sum: number, b: any) => sum + Number(b.rating), 0) / reviewCount).toFixed(1))
+    : 0;
+
+  return {
+    reviewCount,
+    rating,
+    formattedRating: reviewCount > 0 ? rating.toFixed(1) : "0.0",
+  };
+}
+
 export async function addBooking(
   booking: Omit<SharedBooking, "id" | "createdAt" | "paymentSplit" | "userId">
 ): Promise<SharedBooking> {
   const createdAt = new Date().toISOString();
 
-  const currentUserSession = typeof window !== "undefined"
-    ? JSON.parse(localStorage.getItem("rentmate_current_user") || "null")
-    : null;
+  const currentUser = getCurrentUserOrMitra();
+  
+  let userId: string = "user-id";
+  let userName: string = "User";
+  let userPhoto: string = booking.userPhoto || "";
 
-  const currentUsername = typeof window !== "undefined" 
-    ? localStorage.getItem("rentmate_current_username") 
-    : null;
-
-  // PERBAIKAN: Jika yang memesan adalah MITRA (login sebagai mitra), ambil identitas
-  // dari sesi mitra. Sebelumnya hanya sesi user biasa yang dibaca, sehingga booking
-  // mitra tersimpan dengan user_id fallback "user-id" / nama "User" — yang lalu
-  // dianggap bentrok jadwal dan membuat pembayaran gagal.
-  const mitraSession = typeof window !== "undefined"
-    ? JSON.parse(localStorage.getItem("rentmate_current_mitra") || "null")
-    : null;
-  const isMitraAuthed = typeof window !== "undefined"
-    ? localStorage.getItem("mitraAuthenticated") === "true"
-    : false;
-
-  let userId: string;
-  let userName: string;
-  let userPhoto: string;
-
-  if (isMitraAuthed && mitraSession) {
-    userId = mitraSession.talentId || mitraSession.id || mitraSession.user_id || "mitra-id";
-    userName = mitraSession.name || mitraSession.user_metadata?.name || mitraSession.full_name || "Mitra";
-    userPhoto = mitraSession.photo || booking.userPhoto || "";
-  } else {
-    // Coba ambil nama dari sesi user - pastikan bukan string kosong
-    const rawName = currentUserSession?.name;
-    const rawUsername = currentUserSession?.username || currentUsername;
-    userId = currentUserSession?.id || currentUserSession?.user_id || currentUsername || "user-id";
-    // Nama: pakai name jika ada dan bukan kosong, jika tidak pakai username
-    userName = (rawName && rawName.trim()) ? rawName.trim() : (rawUsername || "User");
-    userPhoto = currentUserSession?.photo || booking.userPhoto || "";
+  if (currentUser) {
+    userId = currentUser.data.id || currentUser.data.talentId || currentUser.data.user_id || "user-id";
+    userName = currentUser.data.name || currentUser.data.full_name || "User";
+    userPhoto = currentUser.data.photo || booking.userPhoto || "";
   }
 
   // Simpan ke Supabase termasuk kolom user_name yang baru saja kamu buat
@@ -254,7 +265,8 @@ export async function addBooking(
 
   if (!response.ok) {
     console.error("Gagal menambah booking ke API");
-    throw new Error("Gagal membuat draft pemesanan");
+    const errorData = await response.json().catch(() => null);
+    throw new Error(errorData?.message || errorData?.error || "Gagal membuat draft pemesanan");
   }
   const data = await response.json();
 
@@ -409,13 +421,16 @@ export function getCurrentUserOrMitra() {
 
 export async function updateBookingApproval(
   id: string,
-  status: "approved" | "rejected" | "pending_mitra"
+  status: "approved" | "rejected" | "pending_mitra",
+  rejectionReason?: string
 ): Promise<SharedBooking | undefined> {
   const target = cachedBookings.find(b => b.id === id);
   if (!target) return undefined;
+  const isMitraRejection = status === "rejected" && rejectionReason !== undefined;
+  if (isMitraRejection && rejectionReason.trim().length < 5) return undefined;
 
   // REFUND LOGIC: Jika ditolak dan bayar pakai saldo, kembalikan saldonya
-  if (status === "rejected" && target.paymentMethod === "saldo" && target.paymentStatus === "paid") {
+  if (!isMitraRejection && status === "rejected" && target.paymentMethod === "saldo" && target.paymentStatus === "paid") {
     try {
       const userRes = await fetch(`/api/users/id/${target.userId}`);
       if (userRes.ok) {
@@ -440,18 +455,26 @@ export async function updateBookingApproval(
 
   // Update approval_status di database
   try {
-    const response = await fetch(`/api/bookings/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approval_status: status })
-    });
+    const response = isMitraRejection
+      ? await fetch(`/api/mitra-bookings/${encodeURIComponent(id)}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mitraId: target.talentId, reason: rejectionReason.trim() }),
+        })
+      : await fetch(`/api/bookings/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approval_status: status })
+        });
 
     if (!response.ok) {
+      if (isMitraRejection) return undefined;
       // Coba verifikasi apakah update sebenarnya berhasil dengan refresh data
       console.warn("API response tidak ok, mencoba verifikasi data terkini...");
     }
   } catch (e) {
     console.error("Error saat update approval:", e);
+    if (isMitraRejection) return undefined;
     // Jangan throw — lanjut refresh data untuk verifikasi
   }
 
@@ -492,7 +515,7 @@ export async function updateBookingApproval(
       });
     }
   } else if (status === "rejected") {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && !isMitraRejection) {
       addNotificationForUser(refreshedBooking.userId, {
         title: "Pesanan Ditolak",
         message: `Maaf, pesananmu dengan ${refreshedBooking.talentName} untuk "${refreshedBooking.purpose}" ditolak. Dana akan dikembalikan jika sudah dibayar.`,
@@ -598,7 +621,9 @@ export function getPendingBookings(): SharedBooking[] {
 
 export function getRefundPendingBookings(): SharedBooking[] {
   return cachedBookings.filter(
-    booking => booking.approvalStatus === "expired" && booking.paymentStatus === "refund_pending"
+    booking =>
+      (booking.approvalStatus === "expired" || booking.approvalStatus === "rejected") &&
+      booking.paymentStatus === "refund_pending"
   );
 }
 
@@ -906,6 +931,76 @@ export function isTimeSlotInPast(date: string, time: string): boolean {
   const slotTime = new Date(today);
   slotTime.setHours(hour, minute, 0, 0);
   return slotTime <= today;
+}
+
+/* ================= OPERATIONAL HOURS & DURATION HELPERS ================= */
+export const OPERATIONAL_START_HOUR = 8;  // 08:00 WIB
+export const OPERATIONAL_END_HOUR = 22;   // 22:00 WIB
+
+export interface BookingTimeDetails {
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+  formattedEndTime: string;
+  totalEndMinutes: number;
+  exceedsOperational: boolean;
+}
+
+export function getBookingTimeDetails(time: string, duration: number): BookingTimeDetails {
+  if (!time) {
+    return {
+      startHour: 0,
+      startMinute: 0,
+      endHour: 0,
+      endMinute: 0,
+      formattedEndTime: "",
+      totalEndMinutes: 0,
+      exceedsOperational: false,
+    };
+  }
+
+  const [startHourStr, startMinuteStr] = String(time).slice(0, 5).split(":");
+  const startHour = Number(startHourStr) || 0;
+  const startMinute = Number(startMinuteStr) || 0;
+  const totalStartMinutes = startHour * 60 + startMinute;
+  const totalEndMinutes = totalStartMinutes + (Number(duration) || 1) * 60;
+
+  const rawEndHour = Math.floor(totalEndMinutes / 60);
+  const endMinute = totalEndMinutes % 60;
+  const displayEndHour = rawEndHour % 24;
+  const isNextDay = rawEndHour >= 24;
+
+  const formattedEndTime = `${String(displayEndHour).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}${isNextDay ? " (besok)" : ""}`;
+
+  // Batas operasional selesai pukul 22:00 (22 * 60 = 1320 menit)
+  const maxOperationalMinutes = OPERATIONAL_END_HOUR * 60;
+  const exceedsOperational = totalEndMinutes > maxOperationalMinutes;
+
+  return {
+    startHour,
+    startMinute,
+    endHour: rawEndHour,
+    endMinute,
+    formattedEndTime,
+    totalEndMinutes,
+    exceedsOperational,
+  };
+}
+
+export function getLatestStartTimeForDuration(duration: number): string {
+  const safeDuration = Number(duration) || 1;
+  const maxStartMinutes = OPERATIONAL_END_HOUR * 60 - safeDuration * 60;
+  if (maxStartMinutes < OPERATIONAL_START_HOUR * 60) {
+    return "08:00";
+  }
+  const maxHour = Math.floor(maxStartMinutes / 60);
+  const maxMinute = maxStartMinutes % 60;
+  return `${String(maxHour).padStart(2, "0")}:${String(maxMinute).padStart(2, "0")}`;
+}
+
+export function isTimeSlotExceedingOperatingHours(time: string, duration: number): boolean {
+  return getBookingTimeDetails(time, duration).exceedsOperational;
 }
 
 function isBrowser(): boolean {

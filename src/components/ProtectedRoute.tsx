@@ -1,4 +1,6 @@
 import { Navigate } from "react-router-dom";
+import { safeGetLocalStorage } from "@/lib/storageHelper";
+
 interface ProtectedRouteProps {
   children: React.ReactNode;
   type?: "user" | "mitra" | "admin";
@@ -8,11 +10,11 @@ export function ProtectedRoute({ children, type = "user" }: ProtectedRouteProps)
   let isLoggedIn = false;
 
   if (type === "user") {
-    isLoggedIn = !!localStorage.getItem("rentmate_current_username") &&
-      !!localStorage.getItem("rentmate_current_user");
+    isLoggedIn = !!safeGetLocalStorage("rentmate_current_username") &&
+      !!safeGetLocalStorage("rentmate_current_user");
   } else if (type === "mitra") {
-    isLoggedIn = !!localStorage.getItem("mitraAuthenticated") &&
-      !!localStorage.getItem("rentmate_current_mitra");
+    isLoggedIn = safeGetLocalStorage("mitraAuthenticated") === "true" &&
+      !!safeGetLocalStorage("rentmate_current_mitra");
   } else if (type === "admin") {
     isLoggedIn = sessionStorage.getItem("adminAuthenticated") === "true";
   }

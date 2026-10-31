@@ -1,4 +1,4 @@
-﻿// src/lib/mitraStore.ts
+// src/lib/mitraStore.ts
 
 
 import {
@@ -7,8 +7,16 @@ import {
   MitraLoginData,
 } from "@/types/mitra";
 import { talents } from "@/data/mockData";
-import { getBookings } from "@/lib/bookingStore";
+import { getBookings, getTalentReviewStats } from "@/lib/bookingStore";
 import { getCurrentUser } from "@/lib/userStore";
+import {
+  saveCurrentMitraSession,
+  getCurrentMitraSession,
+  clearCurrentMitraSession,
+  safeGetLocalStorage,
+  safeSetLocalStorage,
+  cleanupStorageQuota,
+} from "./storageHelper";
 
 /* ================= STATE ================= */
 let mitraAccounts: MitraAccount[] = [];
@@ -62,7 +70,7 @@ export function getMitraAccounts() {
 export function getCurrentMitra() {
   if (!isBrowser()) return null;
   try {
-    const mitraData = localStorage.getItem("rentmate_current_mitra");
+    const mitraData = safeGetLocalStorage("rentmate_current_mitra");
     if (!mitraData) return null;
     
     const mitra = JSON.parse(mitraData);
@@ -75,7 +83,7 @@ export function getCurrentMitra() {
       mitra.full_name ||
       'Mitra';
     
-    const isAuthenticated = localStorage.getItem("mitraAuthenticated");
+    const isAuthenticated = safeGetLocalStorage("mitraAuthenticated");
     if (!isAuthenticated) {
       return null;
     }
@@ -113,11 +121,11 @@ export function getCurrentMitra() {
 // TAMBAHKAN FUNGSI INI
 export function getCurrentUserOrMitra() {
   // Cek apakah user adalah mitra
-  const mitraData = localStorage.getItem("rentmate_current_mitra");
+  const mitraData = safeGetLocalStorage("rentmate_current_mitra");
   if (mitraData) {
     try {
       const mitra = JSON.parse(mitraData);
-      const isAuthenticated = localStorage.getItem("mitraAuthenticated");
+      const isAuthenticated = safeGetLocalStorage("mitraAuthenticated");
       if (isAuthenticated) {
         const talentId = mitra.talentId || mitra.id || mitra.user_id;
         if (talentId) {
@@ -192,17 +200,50 @@ export function updateMitraVerification(mitraId: string, documents: any) {
 }
 
 /* ================= ADMIN REJECT ================= */
-export function rejectMitra(mitraId: string) {
-  const mitra = mitraAccounts.find(m => m.id === mitraId);
-  if (!mitra) return false;
+export async function rejectMitra(mitraId: string, email?: string, reason?: string): Promise<boolean> {
+  const mitra = mitraAccounts.find(m => m.id === mitraId || m.talentId === mitraId || (email && m.email === email));
+  if (mitra) {
+    if (mitra.isLegacyTalent) return true;
+    mitra.verificationStatus = "rejected";
+    mitra.isVerified = false;
+    if (reason) mitra.rejection_reason = reason;
+    save();
+    notify();
+  }
 
-  if (mitra.isLegacyTalent) return true;
+  // Panggil endpoint backend agar status ter-update di database
+  const targetEmail = email || mitra?.email;
+  const payload = {
+    talentId: mitraId,
+    talentEmail: targetEmail,
+    reason: reason || 'Dokumen belum memenuhi persyaratan verifikasi.'
+  };
 
-  mitra.verificationStatus = "rejected";
-  mitra.isVerified = false;
+  try {
+    let res = await fetch('/api/reject-talent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-  save();
-  notify();
+    if (!res.ok) {
+      res = await fetch('/reject-talent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || `Gagal menolak talent (Status: ${res.status})`);
+    }
+  } catch (err: any) {
+    console.error('Error rejecting talent in backend:', err);
+    throw err;
+  }
+
+  window.dispatchEvent(new CustomEvent("mitraVerificationUpdated"));
   return true;
 }
 
@@ -216,13 +257,12 @@ export async function getAllVerifiedTalents() {
     }
     const approvedTalents = await response.json();
 
-    const formattedNewTalents = approvedTalents.map((mitra: any) => {
+    const formattedNewTalents = (Array.isArray(approvedTalents) ? approvedTalents : [])
+      .filter((mitra: any) => mitra.status === 'approved' && (mitra.price_accepted === 1 || mitra.price_accepted === true))
+      .map((mitra: any) => {
       const targetId = mitra.user_id || mitra.id;
       const mockTalent = talents.find(t => t.id === targetId || t.email === mitra.email);
-      
-      const seedNum = (targetId || "").split("").reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
-      const defaultRating = mockTalent?.rating || Number((4.7 + (seedNum % 3) * 0.1).toFixed(1));
-      const defaultReviewCount = mockTalent?.reviewCount || (5 + (seedNum % 4));
+      const stats = getTalentReviewStats({ id: targetId, talentId: targetId });
 
       return {
         id: targetId,
@@ -232,8 +272,8 @@ export async function getAllVerifiedTalents() {
         city: mitra.address || mockTalent?.city || 'Indonesia',
         category: mitra.category || mockTalent?.skills?.[0] || 'Teman Acara',
         description: mitra.description || mockTalent?.bio || 'Siap menemani acara kamu.',
-        rating: defaultRating,
-        reviewCount: defaultReviewCount,
+        rating: stats.reviewCount > 0 ? stats.rating : 0,
+        reviewCount: stats.reviewCount,
         price: (mitra.price && Number(mitra.price) > 0) ? Number(mitra.price) : (mockTalent?.pricePerHour || 250000),
         pricePerHour: (mitra.price && Number(mitra.price) > 0) ? Number(mitra.price) : (mockTalent?.pricePerHour || 250000),
         availability: 'both',
@@ -253,17 +293,25 @@ export async function getAllVerifiedTalents() {
       return formattedNewTalents;
     }
 
-    return talents.map(t => ({ 
-      ...t, 
-      isLegacy: true,
-      talentId: t.id,
-      email: t.email,
-      skills: t.skills || [],
-    }));
+    return talents.map(t => {
+      const stats = getTalentReviewStats({ id: t.id, talentId: t.id });
+      return { 
+        ...t, 
+        isLegacy: true,
+        talentId: t.id,
+        email: t.email,
+        skills: t.skills || [],
+        rating: stats.reviewCount > 0 ? stats.rating : 0,
+        reviewCount: stats.reviewCount,
+      };
+    });
 
   } catch (error) {
     console.error("Gagal memuat data talent:", error);
-    return talents.map(t => ({ ...t, isLegacy: true, talentId: t.id, email: t.email, skills: t.skills || [] }));
+    return talents.map(t => {
+      const stats = getTalentReviewStats({ id: t.id, talentId: t.id });
+      return { ...t, isLegacy: true, talentId: t.id, email: t.email, skills: t.skills || [], rating: stats.reviewCount > 0 ? stats.rating : 0, reviewCount: stats.reviewCount };
+    });
   }
 }
 
@@ -292,6 +340,9 @@ export async function registerMitra(
         photo: data.photo,
         ktp: data.ktp,
         age: data.age,
+        experience_level: data.experience_level || 'menengah',
+        price_expectation: data.price_expectation || 'Rp 50.000 - Rp 85.000',
+        social_media: data.social_media || '',
       }),
     });
     console.log('Response dari server diterima:', response);
@@ -363,8 +414,7 @@ export async function loginMitra(data: MitraLoginData): Promise<any> {
         lastActive: new Date().toISOString(),
       };
       
-      localStorage.setItem("rentmate_current_mitra", JSON.stringify(formattedOldTalent));
-      localStorage.setItem("mitraAuthenticated", "true");
+      saveCurrentMitraSession(formattedOldTalent);
       
       window.dispatchEvent(new CustomEvent("mitraLoggedIn", { detail: { user: formattedOldTalent } }));
       
@@ -402,6 +452,15 @@ export async function loginMitra(data: MitraLoginData): Promise<any> {
       isOnline: true,
       lastActive: new Date().toISOString(),
       isLegacyTalent: false,
+      price: result.user?.price ? Number(result.user.price) : 0,
+      pricing_tier: result.user?.pricing_tier || 'tier2',
+      price_accepted: Boolean(result.user?.price_accepted),
+      rejection_reason: result.user?.rejection_reason || '',
+      appeal_note: result.user?.appeal_note || '',
+      category: result.user?.category || '',
+      experience_level: result.user?.experience_level || 'menengah',
+      price_expectation: result.user?.price_expectation || '',
+      social_media: result.user?.social_media || '',
       verificationStatus:
         result.user?.status === "approved"
           ? "approved"
@@ -411,8 +470,7 @@ export async function loginMitra(data: MitraLoginData): Promise<any> {
       isVerified: result.user?.status === "approved",
     };
     
-    localStorage.setItem("rentmate_current_mitra", JSON.stringify(userWithTalentId));
-    localStorage.setItem("mitraAuthenticated", "true");
+    saveCurrentMitraSession(userWithTalentId);
     window.dispatchEvent(new CustomEvent("mitraLoggedIn", { detail: { user: userWithTalentId } }));
     
     return userWithTalentId;
@@ -428,15 +486,14 @@ export function logoutMitra() {
     currentMitra.isOnline = false;
     currentMitra.lastActive = new Date().toISOString();
   }
-  localStorage.removeItem("rentmate_current_mitra");
-  localStorage.removeItem("mitraAuthenticated");
+  clearCurrentMitraSession();
   currentMitra = null;
   save();
   notify();
 }
 
 /* ================= APPROVE ================= */
-export async function approveMitra(mitraId: string, mitraEmail: string, mitraName: string, price?: number) {
+export async function approveMitra(mitraId: string, mitraEmail: string, mitraName: string, price?: number, pricingTier?: string, adminPriceNote?: string) {
   console.log(`Menyetujui mitra ${mitraEmail} dan mengirim email.`);
   try {
     const response = await fetch('/send-approval', {
@@ -446,6 +503,8 @@ export async function approveMitra(mitraId: string, mitraEmail: string, mitraNam
         talentEmail: mitraEmail,
         talentName: mitraName,
         price,
+        pricing_tier: pricingTier || 'tier2',
+        admin_price_note: adminPriceNote || null,
         loginLink: `${window.location.origin}/mitra/login`
       }),
     });
@@ -597,7 +656,7 @@ export async function updateMitraProfile(data: {
       ...data
     };
     
-    localStorage.setItem("rentmate_current_mitra", JSON.stringify(updatedMitra));
+    saveCurrentMitraSession(updatedMitra);
     
     if (!currentMitra.isLegacyTalent) {
       // Bangun payload hanya dari field yang benar-benar diisi (partial update),
@@ -641,7 +700,7 @@ export function updateMitraOnlineStatus(isOnline: boolean) {
     lastActive: new Date().toISOString()
   };
   
-  localStorage.setItem("rentmate_current_mitra", JSON.stringify(updatedMitra));
+  saveCurrentMitraSession(updatedMitra);
   
   window.dispatchEvent(new CustomEvent("mitraStatusUpdated", { detail: { mitra: updatedMitra } }));
 }

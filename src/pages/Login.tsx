@@ -1,24 +1,30 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Mail, Lock, User, ArrowRight, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { getCurrentUser } from "@/lib/userStore";
+import { saveCurrentMitraSession } from "@/lib/storageHelper";
 
 
 export default function Login() {
+  const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
-  const [isLogin, setIsLogin] = useState(true);
+  const [isLogin, setIsLogin] = useState(() => location.pathname !== "/register");
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
     password: "",
   });
+
+  useEffect(() => {
+    setIsLogin(location.pathname !== "/register");
+  }, [location.pathname]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +83,7 @@ export default function Login() {
             });
 
             setTimeout(() => {
-              navigate("/profile", { replace: true });
+              navigate("/", { replace: true });
             }, 300);
             setIsLoading(false);
             return;
@@ -101,8 +107,7 @@ export default function Login() {
               isOnline: true,
               lastActive: new Date().toISOString(),
             };
-            localStorage.setItem("mitraAuthenticated", "true");
-            localStorage.setItem("rentmate_current_mitra", JSON.stringify(mitraUser));
+            saveCurrentMitraSession(mitraUser);
 
             toast({
               title: "Login Mitra Berhasil! 🎉",

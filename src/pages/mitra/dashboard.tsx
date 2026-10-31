@@ -50,8 +50,10 @@ import {
   isBookingCompleted,
 } from "@/lib/bookingStore";
 import { getCurrentMitra, updateMitraProfile, subscribeToMitraChanges } from "@/lib/mitraStore";
+import { clearCurrentMitraSession } from "@/lib/storageHelper";
 import {
   getChatSessionByBookingId,
+  fetchChatsFromSupabase,
   sendMitraMessage,
   subscribeToChats,
   ChatMessage,
@@ -61,6 +63,12 @@ import { formatPrice } from "@/lib/utils";
 
 // --- TIPE DATA ---
 type MitraRole = "talent" | "booker";
+type MitraConductSummary = {
+  strikes60Days: number;
+  strikes90Days: number;
+  suspendedUntil: string | null;
+  isSuspended: boolean;
+};
 
 type Message = {
   id: string;
@@ -121,6 +129,7 @@ export default function MitraDashboard() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [conductSummary, setConductSummary] = useState<MitraConductSummary | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Helper untuk mendapatkan data mitra berdasarkan mode
@@ -130,6 +139,30 @@ export default function MitraDashboard() {
     const timer = window.setInterval(() => setCurrentTime(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const mitraId = mitraAsTalent?.talentId || mitraAsTalent?.id;
+    if (!mitraId) return;
+
+    let isMounted = true;
+    const loadConductSummary = async () => {
+      try {
+        const response = await fetch(`/api/mitra-conduct/${encodeURIComponent(mitraId)}`);
+        if (response.ok && isMounted) setConductSummary(await response.json());
+      } catch (error) {
+        console.error("Gagal memuat ringkasan pelanggaran mitra:", error);
+      }
+    };
+
+    void loadConductSummary();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadConductSummary();
+    }, 30000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(interval);
+    };
+  }, [mitraAsTalent?.talentId, mitraAsTalent?.id]);
 
   // --- FUNGSI YANG DIPERBAIKI & DIOPTIMASI ---
 
@@ -145,6 +178,7 @@ export default function MitraDashboard() {
 
       console.log(`MitraDashboard: Loading bookings for mode: ${mode}`);
       const allBookings = await refreshBookingsFromSupabase();
+      await fetchChatsFromSupabase();
 
       const pendingBookings = mode === "talent"
         ? allBookings.filter(
@@ -276,6 +310,10 @@ export default function MitraDashboard() {
       );
 
       setChats(transformedChats);
+      setSelectedChat((current) => {
+        if (!current) return current;
+        return transformedChats.find((chat) => chat.id === current.id) || null;
+      });
       setBookings(mitraBookings);
       setLastUpdateTime(Date.now());
       localStorage.setItem("rentmate_last_data_update", Date.now().toString());
@@ -373,8 +411,7 @@ export default function MitraDashboard() {
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem("mitraAuthenticated");
-    localStorage.removeItem("rentmate_current_mitra");
+    clearCurrentMitraSession();
     toast({ title: "Logout Berhasil", description: "Anda telah keluar dari Dashboard Mitra" });
     setIsLogoutDialogOpen(false);
     navigate("/mitra/login");
@@ -400,11 +437,35 @@ export default function MitraDashboard() {
     }
 
     if (addedMessage) {
+      const optimisticMessage: Message = {
+        id: addedMessage.id,
+        senderId: addedMessage.senderId,
+        senderName: currentMitra?.name || "Saya",
+        senderPhoto: currentMitra?.photo || "",
+        content: addedMessage.message,
+        timestamp: new Date(addedMessage.timestamp),
+        isFromMe: true,
+      };
+      setSelectedChat((current) => current?.bookingId === bookingId
+        ? {
+            ...current,
+            messages: [...current.messages, optimisticMessage],
+            lastMessage: text,
+            lastMessageTime: new Date(),
+            isUnread: false,
+          }
+        : current);
+      setChats((current) => current.map((chat) => chat.bookingId === bookingId
+        ? {
+            ...chat,
+            messages: [...chat.messages, optimisticMessage],
+            lastMessage: text,
+            lastMessageTime: new Date(),
+            isUnread: false,
+          }
+        : chat));
       setMessageInput("");
       console.log("MitraDashboard: Pesan berhasil dikirim.");
-      setTimeout(() => {
-        loadBookings(activeMode);
-      }, 500);
     } else {
       console.error("MitraDashboard: Gagal mengirim pesan.");
       toast({ title: "Gagal Mengirim", description: "Pesan tidak terkirim. Silakan refresh halaman.", variant: "destructive" });
@@ -419,6 +480,14 @@ export default function MitraDashboard() {
       const currentMitra = getCurrentMitra();
       if (!isMitraAuthenticated || !currentMitra) {
         navigate("/mitra/login");
+        return false;
+      }
+      if (
+        currentMitra.verificationStatus === "pending" ||
+        currentMitra.verificationStatus === "rejected" ||
+        (currentMitra.verificationStatus === "approved" && !currentMitra.isLegacyTalent && !currentMitra.price_accepted)
+      ) {
+        navigate("/mitra/verification");
         return false;
       }
       return true;
@@ -513,6 +582,12 @@ export default function MitraDashboard() {
     };
     window.addEventListener("bookingApproved", handleBookingApproved);
 
+    const handleBookingsChanged = () => {
+      console.log("MitraDashboard: Bookings changed event received, reloading...");
+      loadBookings(activeMode);
+    };
+    window.addEventListener("bookingsUpdated", handleBookingsChanged);
+
     const handleVisibilityChange = () => {
       if (document.hidden) {
         console.log("MitraDashboard: Tab is hidden, stopping polling.");
@@ -534,6 +609,7 @@ export default function MitraDashboard() {
       window.removeEventListener("chatMessageAdded", handleAnyChatUpdate);
       window.removeEventListener("chatSessionsUpdated", handleAnyChatUpdate);
       window.removeEventListener("bookingApproved", handleBookingApproved);
+      window.removeEventListener("bookingsUpdated", handleBookingsChanged);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [loadBookings, updateStats, activeMode, mitraAsTalent, mitraAsBooker, toast, isOnline]);
@@ -744,6 +820,20 @@ export default function MitraDashboard() {
           </div>
         </div>
 
+        {activeMode === "talent" && conductSummary && (conductSummary.strikes90Days > 0 || conductSummary.isSuspended) && (
+          <Card className={`mb-6 p-4 ${conductSummary.isSuspended ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"}`}>
+            <p className={`font-semibold ${conductSummary.isSuspended ? "text-red-800" : "text-amber-800"}`}>
+              {conductSummary.isSuspended ? "Penerimaan booking sedang dijeda" : "Catatan respons booking"}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {conductSummary.strikes60Days} pelanggaran dalam 60 hari · {conductSummary.strikes90Days} dalam 90 hari.
+              {conductSummary.isSuspended && conductSummary.suspendedUntil
+                ? ` Skors berakhir ${new Date(conductSummary.suspendedUntil).toLocaleString("id-ID")}.`
+                : " Booking yang terlewat setelah batas respons akan tercatat sebagai pelanggaran."}
+            </p>
+          </Card>
+        )}
+
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           {stats.map((stat) => { const Icon = stat.icon; return (
             <Card key={stat.label} className="p-5">
@@ -816,6 +906,9 @@ export default function MitraDashboard() {
                             <h3 className="font-medium truncate">{chat.userName}</h3>
                             <span className="text-xs text-muted-foreground">{formatTime(chat.lastMessageTime)}</span>
                           </div>
+                          <p className="mb-1 truncate text-[11px] text-muted-foreground">
+                            {chat.bookingPurpose} · {formatBookingDate(chat.bookingDate)} · {chat.bookingTime.slice(0, 5)}
+                          </p>
                           <p className="text-sm text-muted-foreground truncate">{chat.lastMessage}</p>
                           <div className="flex items-center gap-2 mt-1">
                             <Badge variant={chat.bookingStatus === "completed" ? "success" : chat.bookingStatus === "cancelled" || chat.bookingStatus === "rejected" || chat.bookingStatus === "expired" ? "destructive" : chat.bookingStatus === "active" ? "default" : chat.bookingStatus === "pending_mitra" ? "warning" : "outline"} className="text-xs">

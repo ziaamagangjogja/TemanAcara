@@ -47,6 +47,10 @@ import MitraVerificationPage from "./pages/mitra/verification";
 import AdminLogin from "./pages/AdminLogin";
 import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
+import { cleanupStorageQuota } from "@/lib/storageHelper";
+
+// Bersihkan kuota storage berlebih saat aplikasi pertama kali dimuat
+cleanupStorageQuota();
 
 const queryClient = new QueryClient();
 

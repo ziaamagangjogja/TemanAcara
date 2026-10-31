@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Talent } from "@/data/mockData";
-import { getBookings } from "@/lib/bookingStore";
+import { getBookings, getTalentReviewStats } from "@/lib/bookingStore";
 
 interface MitraTalentCardProps {
   talent: Talent;
@@ -85,16 +85,10 @@ export function MitraTalentCard({ talent }: MitraTalentCardProps) {
             <Star className="w-3 h-3 fill-current text-amber-400" />
             {/* 🔥 PERBAIKAN: Hitung rating dan jumlah review asli */}
             {(() => {
-              const bookings = getBookings();
-              const ratedBookings = bookings.filter((b: any) => (b.talentId === talent.id || b.talentId === talent.talentId) && typeof b.rating === "number" && b.rating > 0);
-              const reviewCount = ratedBookings.length;
-              const rating = reviewCount > 0 
-                ? (ratedBookings.reduce((sum: number, b: any) => sum + Number(b.rating), 0) / reviewCount).toFixed(1) 
-                : "0.0";
-              
+              const { reviewCount, formattedRating } = getTalentReviewStats(talent);
               return (
                 <>
-                  <span>{rating}</span>
+                  <span>{formattedRating}</span>
                   <span className="opacity-70">({reviewCount})</span>
                 </>
               );

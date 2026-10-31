@@ -16,12 +16,25 @@ import {
   TrendingUp,
   ArrowLeft,
   FileText,
-  Eye
+  Eye,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Copy,
+  Check,
+  MapPin,
+  Sparkles,
+  AlertCircle,
+  Coins,
+  Wallet,
+  Receipt,
+  UserCheck
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {  Input } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +56,7 @@ import { formatPrice } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { EarningsDetails } from "@/components/mitra/EarningsDetails";
+import { saveCurrentMitraSession, clearCurrentMitraSession } from "@/lib/storageHelper";
 
 export default function Pengaturan() {
   const navigate = useNavigate();
@@ -60,6 +74,10 @@ export default function Pengaturan() {
   // State untuk dialog detail transaksi
   const [showTransactionDialog, setShowTransactionDialog] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const [showRejectionReason, setShowRejectionReason] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [copiedId, setCopiedId] = useState(false);
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
   const openBookingIdRef = useRef<string | null>(
     (location.state as { openBookingId?: string } | null)?.openBookingId || null
   );
@@ -168,13 +186,33 @@ export default function Pengaturan() {
   // Fungsi untuk membuka dialog detail transaksi
   const handleViewTransactionDetails = (booking: any) => {
     setSelectedTransaction(booking);
+    setShowRejectionReason(false);
+    setRejectionReason("");
     setShowTransactionDialog(true);
   };
 
+  // Fungsi untuk menyalin ID Transaksi
+  const handleCopyTransactionId = (id: string) => {
+    if (!id) return;
+    navigator.clipboard.writeText(id);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 2000);
+    toast({ title: "ID Disalin", description: "ID Transaksi berhasil disalin ke clipboard." });
+  };
+
+  // Opsi alasan penolakan cepat
+  const QUICK_REJECTION_REASONS = [
+    "Jadwal bentrok dengan kegiatan lain",
+    "Kondisi kesehatan sedang kurang fit",
+    "Lokasi pertemuan di luar jangkauan area saya",
+    "Permintaan kegiatan di luar etika & ketentuan layanan",
+  ];
+
   // Fungsi untuk mengubah status persetujuan (Terima / Tolak)
-  const handleUpdateApproval = async (bookingId: string, status: "approved" | "rejected") => {
+  const handleUpdateApproval = async (bookingId: string, status: "approved" | "rejected", reason?: string) => {
     try {
-      const updated = await updateBookingApproval(bookingId, status);
+      setIsSubmittingApproval(true);
+      const updated = await updateBookingApproval(bookingId, status, reason);
       if (!updated) {
         throw new Error("Booking tidak ditemukan");
       }
@@ -184,14 +222,20 @@ export default function Pengaturan() {
 
       toast({
         title: status === "approved" ? "Booking Disetujui!" : "Booking Ditolak",
-        description: `Status pemesanan berhasil diperbarui.`,
+        description: status === "approved"
+          ? "Pesanan berhasil diterima. Silakan cek pesan & hubungi klien."
+          : "Pesanan telah ditolak dan status diperbarui.",
       });
       
       setShowTransactionDialog(false);
+      setShowRejectionReason(false);
+      setRejectionReason("");
       refreshBookings();
     } catch (error) {
       console.error("Gagal mengubah status booking:", error);
       toast({ title: "Error", description: "Gagal memperbarui status.", variant: "destructive" });
+    } finally {
+      setIsSubmittingApproval(false);
     }
   };
 
@@ -272,7 +316,7 @@ export default function Pengaturan() {
           const fresh = data.find((t: any) => t.user_id === mitra.talentId || t.user_id === mitra.id);
           if (fresh?.photo && fresh.photo !== mitra.photo) {
             const updated = { ...mitra, photo: fresh.photo };
-            localStorage.setItem("rentmate_current_mitra", JSON.stringify(updated));
+            saveCurrentMitraSession(updated);
             setCurrentMitra(updated);
           }
         })
@@ -359,19 +403,19 @@ export default function Pengaturan() {
   }, [currentMitra, refreshBookings, toast]);
 
   const handleLogout = () => {
-    localStorage.removeItem("mitraAuthenticated");
-    localStorage.removeItem("rentmate_current_mitra");
+    clearCurrentMitraSession();
     navigate("/mitra/login");
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "pending_approval":
-        return <Badge variant="accent">Menunggu Persetujuan</Badge>;
+      case "pending_mitra":
+        return <Badge className="border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">Menunggu Persetujuan</Badge>;
       case "approved":
-        return <Badge variant="success">Disetujui</Badge>;
+        return <Badge className="border-orange-300 bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300">Disetujui</Badge>;
       case "completed":
-        return <Badge variant="default">Selesai</Badge>;
+        return <Badge className="border-transparent bg-orange-500 text-white shadow-sm">Selesai</Badge>;
       case "rejected":
         return <Badge variant="destructive">Ditolak</Badge>;
       case "expired":
@@ -389,6 +433,30 @@ export default function Pengaturan() {
       year: "numeric",
     });
   };
+
+  // State filter riwayat pemesanan
+  const [historyFilter, setHistoryFilter] = useState<"all" | "pending" | "completed" | "rejected">("all");
+
+  const pendingDecisionCount = useMemo(() => {
+    return bookings.filter(b => b.approvalStatus === "pending_approval" || b.approvalStatus === "pending_mitra").length;
+  }, [bookings]);
+
+  const rejectedBookingsCount = useMemo(() => {
+    return bookings.filter(b => b.approvalStatus === "rejected" || b.approvalStatus === "expired" || b.approvalStatus === "cancelled").length;
+  }, [bookings]);
+
+  const filteredHistoryBookings = useMemo(() => {
+    if (historyFilter === "pending") {
+      return bookings.filter(b => b.approvalStatus === "pending_approval" || b.approvalStatus === "pending_mitra");
+    }
+    if (historyFilter === "completed") {
+      return bookings.filter(b => b.approvalStatus === "completed" || b.approvalStatus === "approved");
+    }
+    if (historyFilter === "rejected") {
+      return bookings.filter(b => b.approvalStatus === "rejected" || b.approvalStatus === "expired" || b.approvalStatus === "cancelled");
+    }
+    return bookings;
+  }, [bookings, historyFilter]);
 
   // PERBAIKAN: Fungsi refresh manual
   const handleRefresh = useCallback(() => {
@@ -601,19 +669,63 @@ export default function Pengaturan() {
         {/* Tab Content */}
         {activeTab === "riwayat" && (
           <div className="space-y-4">
-            {bookings.length > 0 ? (
-              bookings.map((booking) => {
+            {/* Filter Sub-Tabs */}
+            <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-border/60">
+              <Button
+                variant={historyFilter === "all" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setHistoryFilter("all")}
+                className={`h-8 text-xs font-medium rounded-full ${historyFilter === "all" ? "bg-orange-500 hover:bg-orange-600 text-white" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Semua ({bookings.length})
+              </Button>
+              <Button
+                variant={historyFilter === "pending" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setHistoryFilter("pending")}
+                className={`h-8 text-xs font-medium rounded-full ${historyFilter === "pending" ? "bg-orange-500 hover:bg-orange-600 text-white" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Perlu Tindakan
+                {pendingDecisionCount > 0 && (
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold">
+                    {pendingDecisionCount}
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant={historyFilter === "completed" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setHistoryFilter("completed")}
+                className={`h-8 text-xs font-medium rounded-full ${historyFilter === "completed" ? "bg-orange-500 hover:bg-orange-600 text-white" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Disetujui / Selesai
+              </Button>
+              <Button
+                variant={historyFilter === "rejected" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setHistoryFilter("rejected")}
+                className={`h-8 text-xs font-medium rounded-full ${historyFilter === "rejected" ? "bg-orange-500 hover:bg-orange-600 text-white" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Ditolak / Batal ({rejectedBookingsCount})
+              </Button>
+            </div>
+
+            {filteredHistoryBookings.length > 0 ? (
+              filteredHistoryBookings.map((booking) => {
                 const commissionPercentage = getAppCommission();
                 const paymentSplit = calculatePaymentSplit(booking.total || 0, commissionPercentage);
+                const isRejected = booking.approvalStatus === "rejected";
+                const isExpired = booking.approvalStatus === "expired";
+                const isPending = booking.approvalStatus === "pending_approval" || booking.approvalStatus === "pending_mitra";
                 
                 return (
-                  <Card key={booking.id} className="p-5 cursor-pointer hover:shadow-md transition-shadow" 
+                  <Card key={booking.id} className="p-5 cursor-pointer hover:shadow-md transition-shadow border-orange-100/60 dark:border-orange-950/30" 
                     onClick={() => handleViewTransactionDetails(booking)}>
                     <div className="flex items-start gap-4">
                       <img
-                        src={booking.userPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(booking.userName || 'U')}&background=f3f4f6&color=6b7280`}
+                        src={booking.userPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(booking.userName || 'U')}&background=ffedd5&color=ea580c`}
                         alt={booking.userName || "Pengguna"}
-                        className="w-12 h-12 rounded-full object-cover"
+                        className="w-12 h-12 rounded-full object-cover border border-orange-200"
                       />
                       <div className="flex-1">
                         <div className="flex items-start justify-between">
@@ -628,16 +740,54 @@ export default function Pengaturan() {
                           </div>
                           <div className="text-right">
                             {getStatusBadge(booking.approvalStatus)}
-                            <p className="text-lg font-bold text-green-600 mt-1">
-                              +{formatPrice(paymentSplit.mitraAmount)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              Total: {formatPrice(booking.total)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              Biaya Admin ({commissionPercentage}%): {formatPrice(paymentSplit.appAmount)}
-                            </p>
-                            <Button variant="ghost" size="sm" className="mt-2 gap-1">
+
+                            {isRejected ? (
+                              <div className="mt-1">
+                                <p className="text-sm font-semibold text-rose-500 line-through">
+                                  +{formatPrice(paymentSplit.mitraAmount)}
+                                </p>
+                                <span className="text-[11px] text-rose-600 font-medium block">
+                                  Pesanan Ditolak
+                                </span>
+                                {booking.rejectionReason && (
+                                  <p className="text-[11px] text-muted-foreground max-w-[190px] truncate italic mt-0.5" title={booking.rejectionReason}>
+                                    "{booking.rejectionReason}"
+                                  </p>
+                                )}
+                              </div>
+                            ) : isExpired ? (
+                              <div className="mt-1">
+                                <p className="text-sm font-semibold text-muted-foreground line-through">
+                                  +{formatPrice(paymentSplit.mitraAmount)}
+                                </p>
+                                <span className="text-[11px] text-muted-foreground block">
+                                  Batas Waktu Habis
+                                </span>
+                              </div>
+                            ) : isPending ? (
+                              <div className="mt-1">
+                                <p className="text-sm font-medium text-amber-600">
+                                  Perlu Persetujuan
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Total: {formatPrice(booking.total)}
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="mt-1">
+                                <p className="text-lg font-bold text-orange-600">
+                                  +{formatPrice(paymentSplit.mitraAmount)}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Total: {formatPrice(booking.total)}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Biaya Admin ({commissionPercentage}%): {formatPrice(paymentSplit.appAmount)}
+                                </p>
+                              </div>
+                            )}
+
+                            <Button variant="ghost" size="sm" className="mt-2 gap-1 text-orange-600 hover:text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-950/30">
                               <Eye className="w-4 h-4" />
                               Lihat Detail
                             </Button>
@@ -646,7 +796,7 @@ export default function Pengaturan() {
                         {booking.approvalStatus === "approved" && (
                           <div className="mt-3 pt-3 border-t">
                             <Link to={`/mitra/chat/${booking.id}`} onClick={(e) => e.stopPropagation()}>
-                              <Button variant="outline" size="sm" className="gap-2">
+                              <Button variant="outline" size="sm" className="gap-2 border-orange-200 text-orange-700 hover:bg-orange-50">
                                 <MessageCircle className="w-4 h-4" />
                                 Buka Percakapan
                               </Button>
@@ -659,11 +809,23 @@ export default function Pengaturan() {
                 );
               })
             ) : (
-              <Card className="p-8 text-center">
+              <Card className="p-8 text-center border-orange-100">
                 <Calendar className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-lg font-semibold mb-2">Belum Ada Pemesanan</h3>
-                <p className="text-muted-foreground mb-4">
-                  Anda belum memiliki riwayat pemesanan.
+                <h3 className="text-lg font-semibold mb-2">
+                  {historyFilter === "pending"
+                    ? "Tidak Ada Pesanan Menunggu"
+                    : historyFilter === "rejected"
+                    ? "Tidak Ada Pesanan Ditolak"
+                    : historyFilter === "completed"
+                    ? "Belum Ada Pesanan Selesai"
+                    : "Belum Ada Pemesanan"}
+                </h3>
+                <p className="text-muted-foreground mb-4 text-sm">
+                  {historyFilter === "pending"
+                    ? "Semua pesanan baru sudah Anda respons."
+                    : historyFilter === "rejected"
+                    ? "Belum ada pesanan yang Anda tolak atau dibatalkan."
+                    : "Riwayat pemesanan Anda akan tercatat di sini."}
                 </p>
                 <Button onClick={() => setActiveTab("pesan-mitra")}>
                   Cari Mitra Lain
@@ -681,123 +843,49 @@ export default function Pengaturan() {
               
             </div>
             
-            {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <Card className="p-6 bg-gradient-to-r from-blue-500 to-blue-600 text-white">
+            {/* Summary Metric Cards - Clean Orange & White Aesthetic */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+              <Card className="p-5 bg-card border rounded-2xl shadow-xs hover:border-orange-200 transition-all">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-blue-100 text-sm">Total Pendapatan</p>
-                    <p className="text-2xl font-bold">{formatPrice(earnings.total)}</p>
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      Total Pendapatan
+                    </span>
+                    <p className="text-2xl font-extrabold text-foreground mt-1 tracking-tight">
+                      {formatPrice(earnings.total)}
+                    </p>
+                    <span className="text-[11px] text-muted-foreground mt-0.5 block">
+                      Akumulasi seluruh booking selesai
+                    </span>
                   </div>
-                  <DollarSign className="w-10 h-10 text-blue-200" />
+                  <div className="w-12 h-12 rounded-2xl bg-orange-50 border border-orange-100 flex items-center justify-center text-orange-600 shrink-0">
+                    <DollarSign className="w-6 h-6" />
+                  </div>
                 </div>
               </Card>
               
-              <Card className="p-6 bg-gradient-to-r from-green-500 to-green-600 text-white">
+              <Card className="p-5 bg-card border rounded-2xl shadow-xs hover:border-orange-200 transition-all">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-green-100 text-sm">Pendapatan Bulan Ini</p>
-                    <p className="text-2xl font-bold">{formatPrice(earnings.thisMonth)}</p>
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      Pendapatan Bulan Ini
+                    </span>
+                    <p className="text-2xl font-extrabold text-foreground mt-1 tracking-tight">
+                      {formatPrice(earnings.thisMonth)}
+                    </p>
+                    <span className="text-[11px] text-orange-600 font-medium mt-0.5 flex items-center gap-1">
+                      <TrendingUp className="w-3.5 h-3.5" /> Periode bulan berjalan aktif
+                    </span>
                   </div>
-                  <TrendingUp className="w-10 h-10 text-green-200" />
+                  <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+                    <TrendingUp className="w-6 h-6" />
+                  </div>
                 </div>
               </Card>
             </div>
 
-            {/* PERBAIKAN: Gunakan komponen EarningsDetails yang sudah diimport */}
+            {/* Komponen Utama Pencairan & Riwayat Pendapatan */}
             <EarningsDetails isTalentMode={true} />
-            
-            {/* Detailed Earnings */}
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4">Detail Pendapatan</h3>
-              
-              <div className="space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
-                      <DollarSign className="w-5 h-5 text-green-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium">Pendapatan Selesai</p>
-                      <p className="text-sm text-muted-foreground">
-                        {earnings.completed} pemesanan selesai
-                      </p>
-                    </div>
-                  </div>
-                  <p className="font-semibold">{formatPrice(earnings.total)}</p>
-                </div>
-                
-                <div className="flex items-center justify-between pb-3 border-b">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center">
-                      <Clock className="w-5 h-5 text-yellow-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium">Pendapatan Tertunda</p>
-                      <p className="text-sm text-muted-foreground">
-                        Akan dibayar setelah pemesanan selesai
-                      </p>
-                    </div>
-                  </div>
-                  <p className="font-semibold">{formatPrice(earnings.pending)}</p>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                      <CreditCard className="w-5 h-5 text-blue-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium">Total Estimasi</p>
-                      <p className="text-sm text-muted-foreground">
-                        Pendapatan selesai + tertunda
-                      </p>
-                    </div>
-                  </div>
-                  <p className="font-semibold">{formatPrice(earnings.total + earnings.pending)}</p>
-                </div>
-              </div>
-            </Card>
-
-            {/* Earnings History */}
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4">Riwayat Pendapatan</h3>
-              
-              {completedBookings.length > 0 ? (
-                <div className="space-y-3">
-                  {completedBookings
-                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                    .map((booking) => {
-                      const commissionPercentage = getAppCommission();
-                      const paymentSplit = calculatePaymentSplit(booking.total || 0, commissionPercentage);
-                      
-                      return (
-                        <div key={booking.id} className="flex items-center justify-between pb-3 border-b last:border-0 cursor-pointer hover:bg-muted/30 p-2 rounded transition-colors"
-                          onClick={() => handleViewTransactionDetails(booking)}>
-                          <div>
-                            <p className="font-medium">{booking.userName || "Pengguna"}</p>
-                            <p className="text-sm text-muted-foreground">
-                              {formatDate(booking.date)} • {booking.time} • {booking.duration} jam
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-semibold text-green-600">{formatPrice(paymentSplit.mitraAmount)}</p>
-                            <p className="text-xs text-muted-foreground">Total: {formatPrice(booking.total)}</p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              ) : (
-                <div className="text-center py-8">
-                  <DollarSign className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">Belum Ada Pendapatan</h3>
-                  <p className="text-muted-foreground">
-                    Anda belum memiliki pendapatan dari pemesanan yang selesai.
-                  </p>
-                </div>
-              )}
-            </Card>
           </div>
         )}
         
@@ -833,147 +921,381 @@ export default function Pengaturan() {
         )}
       </div>
 
-      {/* Dialog Detail Transaksi */}
+      {/* Dialog Detail Transaksi - Tema Oren-Putih RentMate & Scroll Lancar */}
       <Dialog open={showTransactionDialog} onOpenChange={(open) => !open && setShowTransactionDialog(false)}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" />
-              Detail Transaksi
-            </DialogTitle>
-          </DialogHeader>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 rounded-2xl border border-border shadow-2xl overflow-hidden bg-background">
+          {/* Header Dialog (Fixed / Shrink-0) */}
+          <div className="shrink-0 bg-gradient-to-r from-orange-500/15 via-amber-500/10 to-transparent border-b border-border/80 px-6 py-4">
+            <DialogHeader className="p-0">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-orange-500/20 flex items-center justify-center text-orange-600 dark:text-orange-400">
+                      <Receipt className="w-4 h-4" />
+                    </div>
+                    <DialogTitle className="text-lg font-bold text-foreground">
+                      Detail Pesanan Teman
+                    </DialogTitle>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span className="text-xs text-muted-foreground font-mono">
+                      ID: {selectedTransaction?.id ? `#${selectedTransaction.id.slice(0, 13)}...` : "-"}
+                    </span>
+                    {selectedTransaction?.id && (
+                      <button
+                        onClick={() => handleCopyTransactionId(selectedTransaction.id)}
+                        className="inline-flex items-center gap-1 text-[11px] text-orange-600 hover:text-orange-700 hover:underline font-medium"
+                        title="Salin ID Transaksi"
+                      >
+                        {copiedId ? (
+                          <>
+                            <Check className="w-3 h-3 text-orange-600" />
+                            <span className="text-orange-600 font-semibold">Tersalin</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Salin ID</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {selectedTransaction && (
+                  <div>
+                    {selectedTransaction.approvalStatus === "pending_approval" ||
+                    selectedTransaction.approvalStatus === "pending_mitra" ? (
+                      <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-xs py-1 px-3">
+                        ⏳ Menunggu Keputusan Anda
+                      </Badge>
+                    ) : (
+                      getStatusBadge(selectedTransaction.approvalStatus)
+                    )}
+                  </div>
+                )}
+              </div>
+            </DialogHeader>
+          </div>
+
+          {/* Konten Dialog Scrollable (Flex-1 & Overflow-Y-Auto) */}
           {selectedTransaction && (
-            <div className="space-y-6">
-              <div className="flex items-center gap-4 mb-4">
-                <div className="flex items-center gap-3 flex-1">
-                  <img src={selectedTransaction.userPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedTransaction.userName || 'U')}&background=f3f4f6&color=6b7280`} alt={selectedTransaction.userName || "Pengguna"} className="w-12 h-12 rounded-full object-cover border-2 border-background shadow" />
-                  <div>
-                    <p className="text-xs text-muted-foreground">Pengguna</p>
-                    <h3 className="font-bold">{selectedTransaction.userName || "Pengguna"}</h3>
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6 overscroll-contain">
+              {/* Kartu Hubungan Pemesan & Mitra */}
+              <div className="relative rounded-2xl border border-orange-100 dark:border-orange-950/40 bg-gradient-to-r from-orange-50/30 via-background to-orange-50/20 p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  {/* Pihak Pengguna */}
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <img
+                      src={
+                        selectedTransaction.userPhoto ||
+                        `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          selectedTransaction.userName || "U"
+                        )}&background=ffedd5&color=ea580c`
+                      }
+                      alt={selectedTransaction.userName || "Pengguna"}
+                      className="w-12 h-12 rounded-full object-cover border-2 border-orange-200 dark:border-orange-800 shadow-sm shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground block">
+                        Klien / Pemesan
+                      </span>
+                      <h4 className="font-bold text-sm truncate text-foreground">
+                        {selectedTransaction.userName || "Pengguna"}
+                      </h4>
+                    </div>
                   </div>
-                </div>
-                <div className="text-center text-muted-foreground">
-                  <div className="w-8 h-[2px] bg-border mx-auto mb-1" />
-                  <span className="text-xs">memesan</span>
-                  <div className="w-8 h-[2px] bg-border mx-auto mt-1" />
-                </div>
-                <div className="flex items-center gap-3 flex-1 justify-end">
-                  <div className="text-right">
-                    <p className="text-xs text-muted-foreground">Teman</p>
-                    <h3 className="font-bold">{selectedTransaction.talentName || currentMitra?.name}</h3>
+
+                  {/* Penghubung Visual */}
+                  <div className="flex flex-col items-center justify-center px-2 shrink-0">
+                    <div className="w-7 h-7 rounded-full bg-orange-500/15 text-orange-600 flex items-center justify-center">
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground mt-0.5 font-medium">memesan</span>
                   </div>
-                  <img src={currentMitra?.photo || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face"} alt={currentMitra?.name || "Talent"} className="w-12 h-12 rounded-full object-cover border-2 border-background shadow" />
+
+                  {/* Pihak Mitra */}
+                  <div className="flex items-center gap-3 flex-1 justify-end min-w-0 text-right">
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground block">
+                        Teman Anda
+                      </span>
+                      <h4 className="font-bold text-sm truncate text-foreground">
+                        {selectedTransaction.talentName || currentMitra?.name || "Saya"}
+                      </h4>
+                    </div>
+                    <img
+                      src={
+                        currentMitra?.photo ||
+                        "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face"
+                      }
+                      alt={currentMitra?.name || "Talent"}
+                      className="w-12 h-12 rounded-full object-cover border-2 border-orange-300 dark:border-orange-800 shadow-sm shrink-0"
+                    />
+                  </div>
                 </div>
               </div>
-              
-              <div className="bg-muted/50 rounded-lg p-4">
-                <div className="mb-4 pb-4 border-b">
-                  <p className="text-xs text-muted-foreground mb-2">ID Transaksi</p>
-                  <div className="bg-background rounded p-3 border">
-                    <p className="font-mono text-sm break-all">{selectedTransaction.id}</p>
+
+              {/* Grid Rincian Jadwal & Aktivitas */}
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-orange-500" /> Rincian Waktu & Lokasi
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-orange-500/10 text-orange-600 flex items-center justify-center shrink-0 mt-0.5">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground block">Tujuan / Agenda</span>
+                      <p className="font-semibold text-sm text-foreground mt-0.5">
+                        {selectedTransaction.purpose || "Aktivitas Sosial"}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Tujuan</p>
-                    <p className="font-medium">{selectedTransaction.purpose}</p>
+
+                  <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-orange-500/10 text-orange-600 flex items-center justify-center shrink-0 mt-0.5">
+                      <Calendar className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground block">Tanggal Pertemuan</span>
+                      <p className="font-semibold text-sm text-foreground mt-0.5">
+                        {new Date(selectedTransaction.date).toLocaleDateString("id-ID", {
+                          weekday: "long",
+                          day: "numeric",
+                          month: "long",
+                          year: "numeric",
+                        })}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Tanggal</p>
-                    <p className="font-medium flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {new Date(selectedTransaction.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
-                    </p>
+
+                  <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0 mt-0.5">
+                      <Clock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground block">Jam Mulai & Durasi</span>
+                      <p className="font-semibold text-sm text-foreground mt-0.5">
+                        {String(selectedTransaction.time).slice(0, 5)} WIB • {selectedTransaction.duration} Jam Layanan
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Waktu & Durasi</p>
-                    <p className="font-medium flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {selectedTransaction.time} • {selectedTransaction.duration} jam
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Status</p>
-                    <div>{getStatusBadge(selectedTransaction.approvalStatus)}</div>
+
+                  <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-orange-500/10 text-orange-600 flex items-center justify-center shrink-0 mt-0.5">
+                      <MapPin className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground block">Kota Pertemuan</span>
+                      <p className="font-semibold text-sm text-foreground mt-0.5">
+                        {selectedTransaction.meeting_city || currentMitra?.city || "Sesuai Kesepakatan"}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-muted/50 rounded-lg p-4">
-                <p className="text-sm font-semibold mb-2">Detail Pembayaran</p>
-                <div className="grid md:grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-muted-foreground">Total Pembayaran</p>
-                    <p className="font-medium">{formatPrice(selectedTransaction.total)}</p>
+
+              {/* Rincian Finansial & Pendapatan Bersih Mitra - Tema Oranye & Putih */}
+              <div className="rounded-2xl border border-orange-200 dark:border-orange-950/40 bg-gradient-to-br from-orange-50/40 via-background to-amber-50/20 dark:from-orange-950/20 dark:via-background dark:to-amber-950/10 p-5 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-border/60">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-orange-500/15 text-orange-600 flex items-center justify-center">
+                      <Coins className="w-4 h-4" />
+                    </div>
+                    <span className="font-bold text-sm text-foreground">Kalkulasi Pendapatan</span>
                   </div>
+                  <Badge variant="outline" className="text-xs bg-orange-100/70 text-orange-800 dark:bg-orange-950/50 dark:text-orange-300 border-orange-300 font-medium">
+                    Status Bayar: {selectedTransaction.paymentStatus === "paid" ? "✅ Lunas" : "⏳ Pending"}
+                  </Badge>
+                </div>
+
+                {/* Banner Sorotan Pendapatan Bersih (Oranye Putih RentMate) */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md shadow-orange-500/20 gap-2">
                   <div>
-                    <p className="text-muted-foreground">Biaya Admin ({getAppCommission()}%)</p>
-                    <p className="font-medium">{formatPrice(calculatePaymentSplit(selectedTransaction.total || 0, getAppCommission()).appAmount)}</p>
+                    <span className="text-xs text-orange-100 font-medium">Estimasi Pendapatan Bersih Mitra</span>
+                    <h3 className="text-2xl font-extrabold tracking-tight mt-0.5 text-white">
+                      {formatPrice(calculatePaymentSplit(selectedTransaction.total || 0, getAppCommission()).mitraAmount)}
+                    </h3>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Pendapatan Mitra</p>
-                    <p className="font-medium">{formatPrice(calculatePaymentSplit(selectedTransaction.total || 0, getAppCommission()).mitraAmount)}</p>
+                  <span className="text-[11px] bg-white/20 text-white rounded-lg px-2.5 py-1 font-medium w-fit">
+                    Masuk ke saldo dompet Anda
+                  </span>
+                </div>
+
+                {/* Rincian Komisi */}
+                <div className="grid grid-cols-2 gap-3 text-xs pt-1 text-muted-foreground">
+                  <div className="space-y-1">
+                    <span>Total Pembayaran Klien:</span>
+                    <p className="font-semibold text-sm text-foreground">{formatPrice(selectedTransaction.total || 0)}</p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Status Pembayaran</p>
-                    <p className="font-medium">{selectedTransaction.paymentStatus || "Belum Dibayar"}</p>
+                  <div className="space-y-1">
+                    <span>Biaya Layanan RentMate ({getAppCommission()}%):</span>
+                    <p className="font-semibold text-sm text-foreground">
+                      - {formatPrice(calculatePaymentSplit(selectedTransaction.total || 0, getAppCommission()).appAmount)}
+                    </p>
                   </div>
                 </div>
-                
+
                 {selectedTransaction.paymentProof && (
-                  <div className="mt-3 pt-3 border-t">
-                    <p className="text-muted-foreground text-sm mb-1">Bukti Transfer</p>
-                    <img 
-                      src={selectedTransaction.paymentProof} 
-                      alt="Bukti Transfer" 
-                      className="w-48 rounded-lg border shadow cursor-pointer" 
-                      onClick={() => window.open(selectedTransaction.paymentProof, "_blank")} 
+                  <div className="pt-3 border-t">
+                    <p className="text-xs text-muted-foreground mb-2 font-medium">Lampiran Bukti Pembayaran:</p>
+                    <img
+                      src={selectedTransaction.paymentProof}
+                      alt="Bukti Transfer"
+                      className="w-40 h-24 object-cover rounded-xl border border-orange-200 shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
+                      onClick={() => window.open(selectedTransaction.paymentProof, "_blank")}
                     />
                   </div>
                 )}
               </div>
-              
+
+              {/* Catatan Tambahan Pemesan (Jika Ada) */}
               {selectedTransaction.notes && (
-                <div className="bg-muted/50 rounded-lg p-4">
-                  <p className="text-sm font-semibold mb-2">Catatan Tambahan</p>
-                  <p className="text-sm">{selectedTransaction.notes}</p>
+                <div className="rounded-xl border border-border/80 bg-muted/20 p-4">
+                  <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground mb-1.5">
+                    <MessageCircle className="w-3.5 h-3.5 text-orange-500" /> Catatan Tambahan Klien
+                  </div>
+                  <p className="text-sm text-foreground leading-relaxed italic">
+                    "{selectedTransaction.notes}"
+                  </p>
+                </div>
+              )}
+
+              {/* FORMULIR PENOLAKAN PESANAN (Tampil saat Mitra menekan 'Tolak') */}
+              {showRejectionReason && (
+                <div className="rounded-2xl border-2 border-rose-300 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 p-5 space-y-4 animate-in fade-in slide-in-from-top-3 duration-200">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-full bg-rose-500/15 text-rose-600 flex items-center justify-center shrink-0 mt-0.5">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-rose-700 dark:text-rose-400">
+                        Konfirmasi Penolakan Pesanan
+                      </h4>
+                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                        Mohon sampaikan alasan yang jelas dan sopan. Alasan ini akan dikirimkan kepada pelanggan dan tercatat pada sistem.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Tombol Alasan Cepat (Quick Reasons) */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground block mb-2">
+                      Pilih Alasan Cepat:
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {QUICK_REJECTION_REASONS.map((reason) => (
+                        <button
+                          key={reason}
+                          type="button"
+                          onClick={() => setRejectionReason(reason)}
+                          className={`text-xs px-3 py-1.5 rounded-full border transition-all text-left ${
+                            rejectionReason === reason
+                              ? "bg-rose-600 text-white border-rose-600 font-medium shadow-sm"
+                              : "bg-background hover:bg-muted text-muted-foreground border-border hover:border-border/80"
+                          }`}
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Input Alasan Custom */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground flex justify-between">
+                      <span>Tulis / Sesuaikan Alasan: <span className="text-destructive">*</span></span>
+                      <span className={`text-[11px] ${rejectionReason.trim().length < 5 ? "text-destructive" : "text-orange-600 font-medium"}`}>
+                        {rejectionReason.trim().length} / min 5 karakter
+                      </span>
+                    </label>
+                    <Textarea
+                      autoFocus
+                      rows={3}
+                      value={rejectionReason}
+                      onChange={(e) => setRejectionReason(e.target.value)}
+                      placeholder="Tuliskan alasan penolakan secara jelas dan sopan..."
+                      className="text-sm bg-background"
+                      maxLength={500}
+                    />
+                  </div>
+
+                  {/* Edukasi Poin Pelanggaran */}
+                  <p className="text-[11px] text-muted-foreground bg-background/80 p-3 rounded-lg border leading-relaxed">
+                    💡 <strong>Ketentuan Mitra:</strong> Menolak pesanan yang sudah diverifikasi tanpa alasan sah secara berturut-turut dapat memengaruhi poin kepatuhan (Strike) akun Anda.
+                  </p>
+
+                  {/* Tombol Aksi Penolakan */}
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowRejectionReason(false)}
+                      disabled={isSubmittingApproval}
+                    >
+                      Batal
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={rejectionReason.trim().length < 5 || isSubmittingApproval}
+                      onClick={() => void handleUpdateApproval(selectedTransaction.id, "rejected", rejectionReason)}
+                      className="gap-1.5 shadow-sm"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      {isSubmittingApproval ? "Memproses..." : "Kirim Penolakan"}
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
           )}
-          <DialogFooter className="flex justify-between items-center">
-            {/* Tombol Terima/Tolak muncul saat menunggu persetujuan mitra,
-                baik saat status masih "pending_approval" (belum diproses admin)
-                maupun "pending_mitra" (admin sudah verifikasi, menunggu mitra). */}
-            {selectedTransaction?.approvalStatus === "pending_approval" ||
-            selectedTransaction?.approvalStatus === "pending_mitra" ? (
-              <div className="flex flex-col gap-2">
-                {selectedTransaction?.approvalStatus === "pending_mitra" && (
-                  <p className="text-xs text-muted-foreground">
-                    Admin sudah memverifikasi pembayaran. Konfirmasi apakah Anda bisa melayani pesanan ini.
-                  </p>
-                )}
-                <div className="flex gap-2">
+
+          {/* Footer Aksi Dialog (Selalu Terlihat di Bagian Bawah / Pinned) */}
+          <div className="shrink-0 border-t bg-background/95 backdrop-blur px-6 py-4 flex flex-col-reverse sm:flex-row items-center justify-between gap-3">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowTransactionDialog(false);
+                setShowRejectionReason(false);
+              }}
+              className="w-full sm:w-auto"
+            >
+              Tutup
+            </Button>
+
+            {/* Tombol Terima & Tolak muncul saat status menunggu konfirmasi mitra */}
+            {!showRejectionReason &&
+              (selectedTransaction?.approvalStatus === "pending_approval" ||
+                selectedTransaction?.approvalStatus === "pending_mitra") && (
+                <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
                   <Button
-                    variant="destructive"
-                    onClick={() => handleUpdateApproval(selectedTransaction.id, "rejected")}
+                    variant="outline"
+                    className="border-rose-300 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-800 dark:text-rose-400 dark:hover:bg-rose-950/30 gap-1.5 flex-1 sm:flex-initial"
+                    onClick={() => {
+                      setShowRejectionReason(true);
+                      setRejectionReason("");
+                    }}
+                    disabled={isSubmittingApproval}
                   >
-                    Tolak
+                    <XCircle className="w-4 h-4" />
+                    Tolak Pesanan
                   </Button>
+
                   <Button
-                    className="bg-green-600 hover:bg-green-700 text-white"
+                    className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold gap-1.5 shadow-md shadow-orange-500/25 flex-1 sm:flex-initial"
                     onClick={() => handleUpdateApproval(selectedTransaction.id, "approved")}
+                    disabled={isSubmittingApproval}
                   >
-                    Terima (Approve)
+                    <CheckCircle2 className="w-4 h-4" />
+                    {isSubmittingApproval ? "Menyetujui..." : "Terima (Approve)"}
                   </Button>
                 </div>
-              </div>
-            ) : (
-              <div />
-            )}
-            <Button variant="outline" onClick={() => setShowTransactionDialog(false)}>Tutup</Button>
-          </DialogFooter>
+              )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
