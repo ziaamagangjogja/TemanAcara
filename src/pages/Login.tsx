@@ -47,9 +47,96 @@ export default function Login() {
           safeRemoveLocalStorage("rentmate_current_mitra");
           safeRemoveLocalStorage("rentmate_current_user");
 
-          // 1. Coba login sebagai regular User.
-          //    Bisa pakai email ATAU username (banyak user mengingat username).
           const identifier = formData.email.trim();
+
+          // 1. Panggil endpoint autentikasi terpadu di backend (mendukung verifikasi bcrypt aman)
+          try {
+            const loginRes = await fetch('/api/users/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                identifier,
+                password: formData.password,
+              }),
+            });
+
+            if (loginRes.ok) {
+              const loginResult = await loginRes.json();
+
+              if (loginResult.type === 'user') {
+                const data = loginResult.user;
+                const safeUserData = {
+                  ...data,
+                  photo: data.photo && typeof data.photo === "string" && data.photo.length > 5000 && data.photo.startsWith("data:") 
+                    ? "" 
+                    : data.photo,
+                };
+
+                safeSetLocalStorage("rentmate_current_username", data.username);
+                safeSetLocalStorage("rentmate_current_user", JSON.stringify(safeUserData));
+
+                try {
+                  window.dispatchEvent(new CustomEvent("userUpdated"));
+                } catch (dispatchErr) {
+                  console.warn("userUpdated dispatch warning:", dispatchErr);
+                }
+
+                toast({
+                  title: "Login Berhasil! 🎉",
+                  description: `Selamat datang kembali, ${data.name || data.username}`,
+                });
+
+                setTimeout(() => {
+                  navigate("/", { replace: true });
+                }, 300);
+                setIsLoading(false);
+                return;
+              } else if (loginResult.type === 'mitra') {
+                const mitraUser = {
+                  ...loginResult.user,
+                  talentId: loginResult.user.talentId || loginResult.user.id || loginResult.user.user_id,
+                  isOnline: true,
+                  lastActive: new Date().toISOString(),
+                };
+                saveCurrentMitraSession(mitraUser);
+
+                if (mitraUser.status === 'pending') {
+                  toast({
+                    title: "Akun Menunggu Verifikasi ⏳",
+                    description: "Mengarahkan ke portal status pengajuan mitra...",
+                  });
+                  setTimeout(() => {
+                    navigate("/mitra/verification", { replace: true });
+                  }, 300);
+                  setIsLoading(false);
+                  return;
+                }
+
+                toast({
+                  title: "Login Mitra Berhasil! 🎉",
+                  description: "Selamat datang kembali di Portal Mitra RentMate",
+                });
+
+                setTimeout(() => {
+                  navigate(mitraUser.status === 'approved' ? "/mitra/dashboard" : "/mitra/verification", { replace: true });
+                }, 300);
+                setIsLoading(false);
+                return;
+              }
+            } else if (loginRes.status === 401) {
+              toast({
+                title: "Login Gagal",
+                description: "Kata sandi salah. Silakan coba lagi.",
+                variant: "destructive",
+              });
+              setIsLoading(false);
+              return;
+            }
+          } catch (loginErr) {
+            console.warn("/api/users/login failed, attempting legacy fallback:", loginErr);
+          }
+
+          // 2. Fallback jika server login terpadu belum merespon
           const candidates = [
             `/api/users/by-email/${encodeURIComponent(identifier)}`,
             `/api/users/${encodeURIComponent(identifier)}`,
@@ -71,8 +158,7 @@ export default function Login() {
           if (userResponse) {
             const data = await userResponse.json();
 
-            // Verifikasi password. Akun lama yang password-nya masih kosong
-            // tetap boleh masuk agar tidak mengunci user yang sudah terdaftar.
+            // Verifikasi password fallback jika password plaintext di DB
             const storedPassword = String(data.password ?? "");
             if (storedPassword !== "" && storedPassword !== formData.password) {
               toast({
@@ -84,8 +170,6 @@ export default function Login() {
               return;
             }
 
-            // Bersihkan base64 besar dari user object sebelum disimpan ke localStorage
-            // agar tidak menyebabkan QuotaExceededError (5MB browser limit).
             const safeUserData = {
               ...data,
               photo: data.photo && typeof data.photo === "string" && data.photo.length > 5000 && data.photo.startsWith("data:") 

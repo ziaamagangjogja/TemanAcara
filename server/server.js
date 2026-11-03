@@ -194,6 +194,84 @@ app.post('/login', async (req, res) => {
   }
 });
 
+// Endpoint terpadu login pengguna reguler & mitra dengan verifikasi bcrypt aman
+app.post('/api/users/login', async (req, res) => {
+  const { identifier, email, password } = req.body;
+  const loginId = (identifier || email || '').trim();
+
+  if (!loginId || !password) {
+    return res.status(400).json({ message: 'Email/username dan kata sandi wajib diisi.' });
+  }
+
+  try {
+    // 1. Coba cari di tabel users (bisa pakai email ATAU username)
+    const [userRows] = await pool.query(
+      'SELECT * FROM users WHERE email = ? OR username = ?',
+      [loginId, loginId]
+    );
+
+    if (userRows.length > 0) {
+      const user = userRows[0];
+      let isMatch = false;
+
+      if (!user.password) {
+        isMatch = true;
+      } else if (user.password.startsWith('$2')) {
+        isMatch = await bcrypt.compare(password, user.password);
+      } else {
+        isMatch = password === user.password;
+      }
+
+      if (isMatch) {
+        const { password: _p, ...safeUser } = user;
+        return res.status(200).json({
+          success: true,
+          type: 'user',
+          user: safeUser,
+        });
+      }
+    }
+
+    // 2. Jika tidak cocok di users, coba cari di tabel profiles (mitra)
+    const [profileRows] = await pool.query(
+      'SELECT * FROM profiles WHERE email = ?',
+      [loginId]
+    );
+
+    if (profileRows.length > 0) {
+      const mitra = profileRows[0];
+      let isMatch = false;
+
+      if (!mitra.password) {
+        isMatch = true;
+      } else if (mitra.password.startsWith('$2')) {
+        isMatch = await bcrypt.compare(password, mitra.password);
+      } else {
+        isMatch = password === mitra.password;
+      }
+
+      if (isMatch) {
+        const { password: _p, ktp: _k, ...safeMitra } = mitra;
+        return res.status(200).json({
+          success: true,
+          type: 'mitra',
+          user: {
+            ...safeMitra,
+            id: mitra.user_id,
+            talentId: mitra.user_id,
+          },
+        });
+      }
+    }
+
+    // Jika sampai di sini, email/username tidak ditemukan atau kata sandi tidak cocok
+    return res.status(401).json({ message: 'Kata sandi salah. Silakan coba lagi.' });
+  } catch (error) {
+    console.error('Error during /api/users/login:', error);
+    return res.status(500).json({ message: 'Terjadi kesalahan saat login.', error: error.message });
+  }
+});
+
 app.get('/api/mitra/status', async (req, res) => {
   const { email, userId } = req.query;
   if (!email && !userId) {
