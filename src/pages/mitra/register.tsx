@@ -93,6 +93,7 @@ export default function MitraRegister() {
   const [portfolioFileName, setPortfolioFileName] = useState<string | null>(null);
   const [portfolioPreview, setPortfolioPreview] = useState<string | null>(null);
   const [portfolioLink, setPortfolioLink] = useState<string>("");
+  const [portfolioTab, setPortfolioTab] = useState<"file" | "link">("file");
   const portfolioFileRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
@@ -819,6 +820,133 @@ export default function MitraRegister() {
                   ⚠️ Anda memilih tipe layanan <strong>Spesialis / Pro</strong> di bawah. Silakan pilih minimal 1 keahlian khusus di atas.
                 </p>
               )}
+
+              {/* Bukti Portofolio / Karya Spesialis (Tab Bersih: Upload File / Link URL) */}
+              {(formData.experienceLevel === "spesialis" || selectedSkills.length > 0) && (
+                <div className="pt-3 mt-1 border-t border-border/60 space-y-2 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-orange-600" />
+                      Bukti Portofolio / Karya
+                      {formData.experienceLevel === "spesialis" ? (
+                        <span className="text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.2 rounded">
+                          Wajib
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-normal text-muted-foreground">
+                          (Opsional)
+                        </span>
+                      )}
+                    </span>
+
+                    {/* Tab Switcher Minimalis */}
+                    <div className="flex items-center rounded-lg bg-muted p-0.5 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setPortfolioTab("file")}
+                        className={`px-2.5 py-0.5 rounded-md transition-all ${
+                          portfolioTab === "file"
+                            ? "bg-background text-foreground font-medium shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Unggah File
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPortfolioTab("link")}
+                        className={`px-2.5 py-0.5 rounded-md transition-all ${
+                          portfolioTab === "link"
+                            ? "bg-background text-foreground font-medium shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Tautan Link
+                      </button>
+                    </div>
+                  </div>
+
+                  {portfolioTab === "file" ? (
+                    <div>
+                      <Input
+                        id="portfolioDoc"
+                        type="file"
+                        accept="image/*,.pdf"
+                        onChange={handlePortfolioUpload}
+                        ref={portfolioFileRef}
+                        className="hidden"
+                      />
+                      {!portfolioFileName ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => portfolioFileRef.current?.click()}
+                          className="w-full h-9 border-dashed border-orange-300 hover:bg-orange-50 text-xs text-orange-800 gap-1.5 font-normal"
+                        >
+                          <Upload className="w-3.5 h-3.5 text-orange-600" />
+                          Pilih foto karya atau sertifikat keahlian (JPG, PNG, PDF)
+                        </Button>
+                      ) : (
+                        <div className="p-2 bg-background rounded-lg border border-orange-200 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {portfolioPreview ? (
+                              <img
+                                src={portfolioPreview}
+                                alt="Portofolio"
+                                className="w-9 h-9 rounded object-cover border border-orange-200 shrink-0"
+                              />
+                            ) : (
+                              <FileText className="w-5 h-5 text-orange-600 shrink-0" />
+                            )}
+                            <div className="min-w-0">
+                              <span className="text-xs font-medium truncate block text-foreground">{portfolioFileName}</span>
+                              <span className="text-[10px] text-orange-700 font-medium">✓ Berkas siap dilampirkan</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => portfolioFileRef.current?.click()}
+                              className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                            >
+                              Ganti
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleRemovePortfolio}
+                              className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <ExternalLink className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                      <Input
+                        id="portfolioLink"
+                        placeholder="https://drive.google.com/... atau link Behance/Instagram karya"
+                        className="h-9 pl-8 text-xs bg-background"
+                        value={portfolioLink}
+                        onChange={(e) => setPortfolioLink(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-muted-foreground leading-normal">
+                    {formData.experienceLevel === "spesialis"
+                      ? "Lampirkan bukti karya atau sertifikat agar pengajuan tarif Spesialis / Pro Anda disetujui Admin."
+                      : "Opsional. Lampirkan jika ingin memperkuat profil keahlian Anda."}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -998,111 +1126,6 @@ export default function MitraRegister() {
                   onChange={(e) => handleInputChange("ktpLink", e.target.value)}
                   required
                 />
-              </div>
-            </div>
-
-            {/* Unggah Berkas / Portofolio Keahlian */}
-            <div className={`p-4 rounded-xl border transition-all ${
-              formData.experienceLevel === "spesialis"
-                ? "bg-orange-50/50 border-orange-300 dark:border-orange-800"
-                : "bg-muted/30 border-border"
-            }`}>
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <Label htmlFor="portfolioDoc" className="text-sm font-semibold flex items-center gap-1.5 text-foreground">
-                  <FileText className="w-4 h-4 text-orange-600 shrink-0" />
-                  Berkas / Portofolio Keahlian
-                </Label>
-                {formData.experienceLevel === "spesialis" ? (
-                  <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-semibold shrink-0">
-                    Wajib untuk Spesialis / Pro
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-[11px] text-muted-foreground font-normal shrink-0">
-                    Opsional
-                  </Badge>
-                )}
-              </div>
-
-              <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-                {formData.experienceLevel === "spesialis" ? (
-                  <span className="text-orange-900 font-medium">
-                    ⚠️ Karena Anda memilih kategori <strong>Spesialis / Pro</strong>, wajib melampirkan berkas gambar portofolio atau link portofolio/sertifikat keahlian agar admin dapat menyetujui tarif tinggi yang diajukan.
-                  </span>
-                ) : (
-                  "Unggah gambar contoh karya/portofolio, sertifikat keahlian, atau cantumkan link portofolio pendukung untuk memperbesar peluang tarif Anda disetujui lebih tinggi oleh admin."
-                )}
-              </p>
-
-              {/* Upload File Gambar / Dokumen */}
-              <div className="space-y-2">
-                <Input
-                  id="portfolioDoc"
-                  type="file"
-                  accept="image/*,.pdf"
-                  onChange={handlePortfolioUpload}
-                  ref={portfolioFileRef}
-                  className="hidden"
-                />
-
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => portfolioFileRef.current?.click()}
-                    className="gap-2 border-orange-300 hover:bg-orange-50 text-xs sm:text-sm font-medium"
-                  >
-                    <Upload className="w-4 h-4 text-orange-600" />
-                    {portfolioFileName ? "Ganti Berkas Portofolio" : "Unggah Gambar / File Portofolio"}
-                  </Button>
-
-                  {portfolioFileName && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleRemovePortfolio}
-                      className="text-xs text-destructive hover:bg-destructive/10 h-9 px-2 gap-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Hapus
-                    </Button>
-                  )}
-                </div>
-
-                {/* Preview Berkas Portofolio jika ada */}
-                {portfolioFileName && (
-                  <div className="mt-2 p-2.5 bg-background rounded-lg border border-orange-200 flex items-center gap-3 animate-in fade-in">
-                    {portfolioPreview ? (
-                      <img
-                        src={portfolioPreview}
-                        alt="Preview Portofolio"
-                        className="w-16 h-16 rounded-md object-cover border border-orange-200 shrink-0"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-md bg-orange-100 text-orange-700 flex items-center justify-center shrink-0">
-                        <FileText className="w-6 h-6" />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold truncate text-foreground">{portfolioFileName}</p>
-                      <p className="text-[11px] text-orange-700 font-medium">✓ Berkas portofolio siap dilampirkan</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Input Alternatif / Tambahan: Link Portofolio Drive / Web */}
-                <div className="pt-2">
-                  <div className="relative">
-                    <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <Input
-                      id="portfolioLink"
-                      placeholder="Atau tautan link portofolio (Drive, Behance, GitHub, Website)"
-                      className="pl-9 text-xs sm:text-sm"
-                      value={portfolioLink}
-                      onChange={(e) => setPortfolioLink(e.target.value)}
-                    />
-                  </div>
-                </div>
               </div>
             </div>
           </div>
