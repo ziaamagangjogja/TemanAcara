@@ -33,11 +33,11 @@ const DEFAULT_HOBBIES = [
 const SPECIALIST_SKILLS = [
   "Fotografer Pro",
   "Videografer & Editor",
+  "Pelatih Gym / Fitness",
   "Pro Gamer / Coach",
   "Tour Guide / Pemandu",
   "Musisi / Vokalis",
   "MC / Host Acara",
-  "Personal Trainer",
   "Penerjemah Bahasa",
 ];
 
@@ -82,6 +82,9 @@ export default function MitraRegister() {
   const [customHobbies, setCustomHobbies] = useState<string[]>([]);
   const [isAddingCustomHobby, setIsAddingCustomHobby] = useState(false);
   const [customHobbyInput, setCustomHobbyInput] = useState("");
+  const [customSkills, setCustomSkills] = useState<string[]>([]);
+  const [isAddingCustomSkill, setIsAddingCustomSkill] = useState(false);
+  const [customSkillInput, setCustomSkillInput] = useState("");
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
   const [portfolioFile, setPortfolioFile] = useState<string | null>(null);
   const [portfolioFileName, setPortfolioFileName] = useState<string | null>(null);
@@ -182,6 +185,25 @@ export default function MitraRegister() {
     }
     setCustomHobbyInput("");
     setIsAddingCustomHobby(false);
+  };
+
+  // Fungsi untuk menambah keahlian khusus kustom (opsi lainnya)
+  const handleAddCustomSkill = () => {
+    const trimmed = customSkillInput.trim();
+    if (!trimmed) return;
+    const formatted = trimmed
+      .split(" ")
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ");
+
+    if (!selectedSkills.includes(formatted)) {
+      setSelectedSkills(prev => [...prev, formatted]);
+    }
+    if (!customSkills.includes(formatted)) {
+      setCustomSkills(prev => [...prev, formatted]);
+    }
+    setCustomSkillInput("");
+    setIsAddingCustomSkill(false);
   };
 
   // Fungsi untuk memvalidasi format link Google Drive atau link dokumen
@@ -713,7 +735,7 @@ export default function MitraRegister() {
 
               {/* Daftar Pill Keahlian Spesialis */}
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {SPECIALIST_SKILLS.map((skill) => {
+                {[...SPECIALIST_SKILLS, ...customSkills].map((skill) => {
                   const isSelected = selectedSkills.includes(skill);
                   return (
                     <button
@@ -733,7 +755,61 @@ export default function MitraRegister() {
                     </button>
                   );
                 })}
+
+                {/* Tombol Tambah Keahlian Kustom / Lainnya */}
+                {!isAddingCustomSkill ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingCustomSkill(true)}
+                    className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs border border-dashed border-orange-400 text-orange-700 bg-background hover:bg-orange-100/60 transition-colors font-medium"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Lainnya (Tulis Sendiri)</span>
+                  </button>
+                ) : null}
               </div>
+
+              {/* Form Input Keahlian Lainnya (Inline & Rapi) */}
+              {isAddingCustomSkill && (
+                <div className="flex items-center gap-1.5 pt-1 animate-in fade-in duration-150">
+                  <Input
+                    type="text"
+                    value={customSkillInput}
+                    onChange={(e) => setCustomSkillInput(e.target.value)}
+                    placeholder="Tulis keahlian khusus Anda (mis: Pelatih Renang, MUA, Barista)..."
+                    className="h-8 text-xs flex-1 bg-background border-orange-300 focus-visible:ring-orange-500"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddCustomSkill();
+                      } else if (e.key === "Escape") {
+                        setIsAddingCustomSkill(false);
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleAddCustomSkill}
+                    className="h-8 px-3 text-xs bg-orange-600 hover:bg-orange-700 text-white"
+                  >
+                    Tambah
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setIsAddingCustomSkill(false);
+                      setCustomSkillInput("");
+                    }}
+                    className="h-8 px-2 text-xs text-muted-foreground"
+                  >
+                    Batal
+                  </Button>
+                </div>
+              )}
 
               {formData.experienceLevel === "spesialis" && selectedSkills.length === 0 && (
                 <p className="text-[11px] text-orange-700 font-medium">
