@@ -197,6 +197,20 @@ export default function MitraVerification() {
       setAppealFileName(null);
       setAppealFilePreview(null);
       setAppealLink('');
+
+      window.dispatchEvent(new CustomEvent("mitraVerificationUpdated"));
+      try {
+        const syncChannel = new BroadcastChannel("rentmate_sync");
+        syncChannel.postMessage({
+          type: "MITRA_APPEAL_SUBMITTED",
+          email: mitra?.email,
+          name: mitra?.name || mitra?.full_name,
+        });
+        syncChannel.close();
+      } catch (bcErr) {
+        console.warn("Gagal mengirim sinyal banding ke Admin:", bcErr);
+      }
+
       toast({
         title: "Banding Tarif Terkirim 📬",
         description: "Admin akan meninjau permohonan penyesuaian tarif beserta bukti portofolio Anda.",

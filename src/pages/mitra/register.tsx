@@ -408,6 +408,20 @@ export default function MitraRegister() {
       };
       saveCurrentMitraSession(candidateSession);
       window.dispatchEvent(new CustomEvent("mitraLoggedIn", { detail: { user: candidateSession } }));
+      window.dispatchEvent(new CustomEvent("mitraVerificationUpdated"));
+
+      // Notifikasi instan antar tab ke Dashboard Admin via BroadcastChannel
+      try {
+        const syncChannel = new BroadcastChannel("rentmate_sync");
+        syncChannel.postMessage({
+          type: "NEW_MITRA_REGISTERED",
+          name: formData.name,
+          email: formData.email,
+        });
+        syncChannel.close();
+      } catch (bcErr) {
+        console.warn("Gagal mengirim notifikasi BroadcastChannel:", bcErr);
+      }
 
       toast({
         title: "Pendaftaran Berhasil 🎉",

@@ -573,23 +573,25 @@ export default function Admin() {
     }
   }, []);
 
-  // Fungsi untuk memuat verifikasi (dipisah)
-  const loadVerifications = useCallback(async () => {
-    setIsLoadingVerifications(true);
+  // Fungsi untuk memuat verifikasi (dipisah, mendukung silent polling otomatis)
+  const loadVerifications = useCallback(async (silent = false) => {
+    if (!silent) setIsLoadingVerifications(true);
     try {
       const isServerAvailable = await checkServerAvailability();
 
       if (!isServerAvailable) {
-        console.warn("Server tidak tersedia, melewati pemuatan data verifikasi");
-        setIsOfflineMode(true);
-        setVerifications([]);
+        if (!silent) {
+          console.warn("Server tidak tersedia, melewati pemuatan data verifikasi");
+          setIsOfflineMode(true);
+          setVerifications([]);
+        }
         return;
       }
 
       setIsOfflineMode(false);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const response = await fetch('/pending-talents', {
         signal: controller.signal
@@ -671,26 +673,28 @@ export default function Admin() {
         console.warn("Gagal memuat data banding tarif:", appErr);
       }
     } catch (error: any) {
-      console.error("Error fetching verifications:", error);
+      if (!silent) {
+        console.error("Error fetching verifications:", error);
 
-      if (error.name === 'AbortError') {
-        toast({
-          title: "Timeout",
-          description: "Server tidak merespon. Pastikan server backend berjalan.",
-          variant: "destructive"
-        });
-      } else {
-        toast({
-          title: "Error Koneksi",
-          description: "Tidak dapat terhubung ke server. Beberapa fitur mungkin tidak berfungsi.",
-          variant: "destructive"
-        });
+        if (error.name === 'AbortError') {
+          toast({
+            title: "Timeout",
+            description: "Server tidak merespon. Pastikan server backend berjalan.",
+            variant: "destructive"
+          });
+        } else {
+          toast({
+            title: "Error Koneksi",
+            description: "Tidak dapat terhubung ke server. Beberapa fitur mungkin tidak berfungsi.",
+            variant: "destructive"
+          });
+        }
+
+        setVerifications([]);
+        setIsOfflineMode(true);
       }
-
-      setVerifications([]);
-      setIsOfflineMode(true);
     } finally {
-      setIsLoadingVerifications(false);
+      if (!silent) setIsLoadingVerifications(false);
     }
   }, [toast]);
 
@@ -1018,13 +1022,18 @@ export default function Admin() {
     return () => clearTimeout(timeoutId);
   }, [loadVerifications, loadReports, loadTopUpRequests, loadWithdrawalRequests, loadFinancialSummary]);
 
-  // Handle updates from other windows
+  // Handle updates from other windows & Real-Time Sync (Cross-tab BroadcastChannel & Storage Event)
   useEffect(() => {
     const handleFinancialUpdate = () => {
       loadTopUpRequests();
       loadWithdrawalRequests();
       loadFinancialSummary();
     };
+
+    const handleVerificationUpdate = () => {
+      loadVerifications(true);
+    };
+
     const handleStorageUpdate = (e: StorageEvent) => {
       if (e.key === "rentmate_topup_requests") {
         loadTopUpRequests();
@@ -1037,16 +1046,69 @@ export default function Admin() {
       if (e.key === "lovable_reports" || e.key === "rentmate_complaints_updated") {
         loadReports();
       }
+      if (
+        e.key === "rentmate_current_mitra" ||
+        e.key === "rentmate_mitra_accounts" ||
+        e.key === "mitraVerificationUpdated"
+      ) {
+        loadVerifications(true);
+      }
     };
+
+    // Cross-tab real-time instant broadcast
+    let broadcastChannel: BroadcastChannel | null = null;
+    try {
+      broadcastChannel = new BroadcastChannel("rentmate_sync");
+      broadcastChannel.onmessage = (event) => {
+        if (
+          event.data?.type === "NEW_MITRA_REGISTERED" ||
+          event.data?.type === "MITRA_APPEAL_SUBMITTED" ||
+          event.data?.type === "MITRA_VERIFICATION_UPDATED"
+        ) {
+          loadVerifications(true);
+          toast({
+            title: "Notifikasi Calon Mitra Masuk 🔔",
+            description:
+              event.data?.type === "NEW_MITRA_REGISTERED"
+                ? `Pendaftaran calon mitra baru (${event.data?.name || "Calon Mitra"}) menunggu verifikasi admin!`
+                : "Ada permohonan banding tarif baru yang masuk!",
+          });
+        }
+      };
+    } catch (e) {
+      console.warn("BroadcastChannel tidak didukung browser:", e);
+    }
+
     window.addEventListener("topupRequestsUpdated", handleFinancialUpdate);
     window.addEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
+    window.addEventListener("mitraVerificationUpdated", handleVerificationUpdate);
+    window.addEventListener("talentListUpdated", handleVerificationUpdate);
     window.addEventListener("storage", handleStorageUpdate);
+
     return () => {
       window.removeEventListener("topupRequestsUpdated", handleFinancialUpdate);
       window.removeEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
+      window.removeEventListener("mitraVerificationUpdated", handleVerificationUpdate);
+      window.removeEventListener("talentListUpdated", handleVerificationUpdate);
       window.removeEventListener("storage", handleStorageUpdate);
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.close();
+        } catch {}
+      }
     };
-  }, [loadTopUpRequests, loadWithdrawalRequests, loadFinancialSummary]);
+  }, [loadTopUpRequests, loadWithdrawalRequests, loadFinancialSummary, loadReports, loadVerifications, toast]);
+
+  // POLLING OTOMATIS LATAR BELAKANG (REAL-TIME: Setiap 5 Detik)
+  // Menjamin jika ada pendaftaran baru atau banding tarif dari tab/perangkat lain,
+  // badge merah notifikasi langsung muncul di dashboard Admin tanpa perlu refresh halaman!
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      loadVerifications(true);
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [loadVerifications]);
 
   // Fetch mitra count langsung dari API saat komponen mount - sebagai safety net
   useEffect(() => {
