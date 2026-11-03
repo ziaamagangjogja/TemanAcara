@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2, Info, FileText, Image, Trash2, ExternalLink } from "lucide-react";
+import { Eye, EyeOff, UserPlus, X, Link, ImageOff, Clock, Upload, CheckCircle2, Info, FileText, Image, Trash2, ExternalLink, Check, Plus, Sparkles, Award } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,12 +15,30 @@ import { talents } from "@/data/mockData";
 import { saveCurrentMitraSession } from "@/lib/storageHelper";
 import { CitySelect } from "@/components/CitySelect";
 
-const categories = [
-  "Travelling", "Nonton Film", "Kuliner", "Fotografi", "Gaming",
-  "Musik", "Videografer", "Olahraga", "Membaca", "Seni",
-  "Memasak", "Hiking", "Yoga", "Renang", "Basket",
-  "Badminton", "Sepak Bola", "Karaoke", "Belanja", "Kopi",
-  "Podcast", "Lainnya"
+const DEFAULT_HOBBIES = [
+  "Kuliner & Kafe",
+  "Nonton Film",
+  "Travelling",
+  "Belanja",
+  "Musik & Konser",
+  "Gaming Kasual",
+  "Olahraga",
+  "Membaca",
+  "Karaoke",
+  "Fotografi Santai",
+  "Seni & Pameran",
+  "Memasak",
+];
+
+const SPECIALIST_SKILLS = [
+  "Fotografer Pro",
+  "Videografer & Editor",
+  "Pro Gamer / Coach",
+  "Tour Guide / Pemandu",
+  "Musisi / Vokalis",
+  "MC / Host Acara",
+  "Personal Trainer",
+  "Penerjemah Bahasa",
 ];
 
 const SERVICE_TYPE_DETAILS: Record<string, {
@@ -59,7 +77,11 @@ export default function MitraRegister() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [hasUserProfile, setHasUserProfile] = useState(false);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedHobbies, setSelectedHobbies] = useState<string[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [customHobbies, setCustomHobbies] = useState<string[]>([]);
+  const [isAddingCustomHobby, setIsAddingCustomHobby] = useState(false);
+  const [customHobbyInput, setCustomHobbyInput] = useState("");
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
   const [portfolioFile, setPortfolioFile] = useState<string | null>(null);
   const [portfolioFileName, setPortfolioFileName] = useState<string | null>(null);
@@ -100,14 +122,14 @@ export default function MitraRegister() {
       }));
       setProfileImagePreview(current => current || user.photo || null);
 
-      const profileHobbies = user.hobbies
+      const profileHobbies = (user.hobbies || "")
         .split(/[,;\n]/)
         .map(hobby => hobby.trim().toLocaleLowerCase())
         .filter(Boolean);
-      const matchingCategories = categories.filter(category =>
-        profileHobbies.includes(category.toLocaleLowerCase())
+      const matchingHobbies = DEFAULT_HOBBIES.filter(hobby =>
+        profileHobbies.includes(hobby.toLocaleLowerCase())
       );
-      setSelectedCategories(current => current.length ? current : matchingCategories);
+      setSelectedHobbies(current => current.length ? current : matchingHobbies);
     };
 
     void fillFromUserProfile();
@@ -129,18 +151,37 @@ export default function MitraRegister() {
     setFormData(prev => ({ ...prev, phone: numericValue }));
   };
 
-  // Fungsi untuk menangani pemilihan kategori
-  const handleCategoryChange = (category: string, checked: boolean) => {
-    if (checked) {
-      setSelectedCategories(prev => [...prev, category]);
-    } else {
-      setSelectedCategories(prev => prev.filter(c => c !== category));
-    }
+  // Fungsi untuk toggle pilihan hobi
+  const toggleHobby = (hobby: string) => {
+    setSelectedHobbies(prev =>
+      prev.includes(hobby) ? prev.filter(h => h !== hobby) : [...prev, hobby]
+    );
   };
 
-  // Fungsi untuk menghapus kategori yang dipilih
-  const removeCategory = (category: string) => {
-    setSelectedCategories(prev => prev.filter(c => c !== category));
+  // Fungsi untuk toggle pilihan keahlian khusus
+  const toggleSkill = (skill: string) => {
+    setSelectedSkills(prev =>
+      prev.includes(skill) ? prev.filter(s => s !== skill) : [...prev, skill]
+    );
+  };
+
+  // Fungsi untuk menambah hobi kustom (opsi lainnya)
+  const handleAddCustomHobby = () => {
+    const trimmed = customHobbyInput.trim();
+    if (!trimmed) return;
+    const formatted = trimmed
+      .split(" ")
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ");
+
+    if (!selectedHobbies.includes(formatted)) {
+      setSelectedHobbies(prev => [...prev, formatted]);
+    }
+    if (!customHobbies.includes(formatted)) {
+      setCustomHobbies(prev => [...prev, formatted]);
+    }
+    setCustomHobbyInput("");
+    setIsAddingCustomHobby(false);
   };
 
   // Fungsi untuk memvalidasi format link Google Drive atau link dokumen
@@ -255,10 +296,11 @@ export default function MitraRegister() {
       return;
     }
 
-    if (selectedCategories.length === 0) {
+    const combinedCategories = [...selectedSkills, ...selectedHobbies];
+    if (combinedCategories.length === 0) {
       toast({
         title: "Registrasi Gagal",
-        description: "Pilih minimal satu kategori talent",
+        description: "Pilih minimal satu hobi atau keahlian",
         variant: "destructive",
       });
       return;
@@ -277,6 +319,15 @@ export default function MitraRegister() {
     // Validasi Portofolio: Wajib jika memilih layanan Spesialis / Pro
     const isSpecialist = formData.experienceLevel === "spesialis";
     const finalPortfolio = portfolioFile || portfolioLink.trim() || "";
+
+    if (isSpecialist && selectedSkills.length === 0) {
+      toast({
+        title: "Keahlian Spesialis Diperlukan",
+        description: "Untuk kategori layanan Spesialis / Pro, silakan pilih minimal satu keahlian khusus yang Anda kuasai.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (isSpecialist && !finalPortfolio) {
       toast({
@@ -297,7 +348,7 @@ export default function MitraRegister() {
         phone: formData.phone,
         address: formData.address,
         description: formData.description,
-        category: selectedCategories.join(", "),
+        category: combinedCategories.join(", "),
         photo: finalPhoto, // Simpan foto profil
         ktp: formData.ktpLink, // Simpan KTP sebagai link Google Drive
         age: parseInt(formData.age), // Tambahkan umur
@@ -318,7 +369,7 @@ export default function MitraRegister() {
         phone: formData.phone,
         address: formData.address,
         description: formData.description,
-        category: selectedCategories.join(", "),
+        category: combinedCategories.join(", "),
         photo: finalPhoto,
         age: parseInt(formData.age),
         experience_level: formData.experienceLevel,
@@ -542,38 +593,152 @@ export default function MitraRegister() {
           <div className="space-y-4">
             <h2 className="text-lg font-semibold border-b pb-2">Informasi Talent</h2>
             
-            <div className="space-y-2">
-              <Label>Keahlian & Hobi (Pilih satu atau lebih)</Label>
-              <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto p-2 border rounded-md">
-                {categories.map((category) => (
-                  <div key={category} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`category-${category}`}
-                      checked={selectedCategories.includes(category)}
-                      onCheckedChange={(checked) => handleCategoryChange(category, checked as boolean)}
-                    />
-                    <Label htmlFor={`category-${category}`} className="text-sm font-normal">
-                      {category}
-                    </Label>
-                  </div>
-                ))}
-              </div>
-              
-              {selectedCategories.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {selectedCategories.map((category) => (
-                    <Badge key={category} variant="secondary" className="gap-1 pr-1 text-xs">
-                      {category}
-                      <button
-                        type="button"
-                        onClick={() => removeCategory(category)}
-                        className="ml-1 rounded-full hover:bg-secondary-80"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </Badge>
-                  ))}
+            {/* 1. Hobi & Minat Santai (Pill Badges) */}
+            <div className="space-y-2.5 p-3.5 rounded-xl bg-orange-50/40 border border-orange-200/70">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="font-semibold text-xs sm:text-sm text-foreground flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-orange-600" />
+                    Hobi & Minat Santai
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Pilih aktivitas santai yang Anda sukai untuk seru-seruan bareng klien
+                  </p>
                 </div>
+                {selectedHobbies.length > 0 && (
+                  <Badge variant="outline" className="text-[10px] text-orange-700 border-orange-300 bg-orange-100/60 font-semibold">
+                    {selectedHobbies.length} dipilih
+                  </Badge>
+                )}
+              </div>
+
+              {/* Daftar Pill Hobi */}
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {[...DEFAULT_HOBBIES, ...customHobbies].map((hobby) => {
+                  const isSelected = selectedHobbies.includes(hobby);
+                  return (
+                    <button
+                      key={hobby}
+                      type="button"
+                      onClick={() => toggleHobby(hobby)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs transition-all ${
+                        isSelected
+                          ? "bg-orange-500 text-white font-medium shadow-xs ring-1 ring-orange-500"
+                          : "bg-background border border-orange-200/80 text-foreground hover:border-orange-400 hover:bg-orange-50/50"
+                      }`}
+                    >
+                      <span>{hobby}</span>
+                      {isSelected ? (
+                        <Check className="w-3 h-3 text-white" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+
+                {/* Tombol Tambah Hobi Kustom / Lainnya */}
+                {!isAddingCustomHobby ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingCustomHobby(true)}
+                    className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs border border-dashed border-orange-400 text-orange-700 bg-background hover:bg-orange-100/60 transition-colors font-medium"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Lainnya (Tulis Sendiri)</span>
+                  </button>
+                ) : null}
+              </div>
+
+              {/* Form Input Hobi Lainnya (Inline & Rapi) */}
+              {isAddingCustomHobby && (
+                <div className="flex items-center gap-1.5 pt-1 animate-in fade-in duration-150">
+                  <Input
+                    type="text"
+                    value={customHobbyInput}
+                    onChange={(e) => setCustomHobbyInput(e.target.value)}
+                    placeholder="Tulis hobi Anda (mis: Board Game, Cosplay)..."
+                    className="h-8 text-xs flex-1 bg-background border-orange-300 focus-visible:ring-orange-500"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddCustomHobby();
+                      } else if (e.key === "Escape") {
+                        setIsAddingCustomHobby(false);
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleAddCustomHobby}
+                    className="h-8 px-3 text-xs bg-orange-600 hover:bg-orange-700 text-white"
+                  >
+                    Tambah
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setIsAddingCustomHobby(false);
+                      setCustomHobbyInput("");
+                    }}
+                    className="h-8 px-2 text-xs text-muted-foreground"
+                  >
+                    Batal
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* 2. Keahlian Khusus / Spesialis (Pill Badges) */}
+            <div className="space-y-2.5 p-3.5 rounded-xl bg-card border border-border/80 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="font-semibold text-xs sm:text-sm text-foreground flex items-center gap-1.5">
+                    <Award className="w-3.5 h-3.5 text-orange-600" />
+                    Keahlian Khusus / Spesialis
+                    <span className="text-[11px] font-normal text-muted-foreground">(Opsional)</span>
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Pilih jika Anda memiliki keterampilan profesional dengan portofolio
+                  </p>
+                </div>
+                {selectedSkills.length > 0 && (
+                  <Badge variant="outline" className="text-[10px] text-orange-700 border-orange-300 bg-orange-50 font-semibold">
+                    {selectedSkills.length} dipilih
+                  </Badge>
+                )}
+              </div>
+
+              {/* Daftar Pill Keahlian Spesialis */}
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {SPECIALIST_SKILLS.map((skill) => {
+                  const isSelected = selectedSkills.includes(skill);
+                  return (
+                    <button
+                      key={skill}
+                      type="button"
+                      onClick={() => toggleSkill(skill)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs transition-all ${
+                        isSelected
+                          ? "bg-orange-600 text-white font-medium shadow-xs ring-1 ring-orange-600"
+                          : "bg-background border border-border text-foreground hover:border-orange-300 hover:bg-orange-50/50"
+                      }`}
+                    >
+                      <span>{skill}</span>
+                      {isSelected ? (
+                        <Check className="w-3 h-3 text-white" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {formData.experienceLevel === "spesialis" && selectedSkills.length === 0 && (
+                <p className="text-[11px] text-orange-700 font-medium">
+                  ⚠️ Anda memilih tipe layanan <strong>Spesialis / Pro</strong> di bawah. Silakan pilih minimal 1 keahlian khusus di atas.
+                </p>
               )}
             </div>
 
