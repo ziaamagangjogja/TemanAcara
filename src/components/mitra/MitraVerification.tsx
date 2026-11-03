@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCurrentMitra, logoutMitra } from '@/lib/mitraStore';
-import { saveCurrentMitraSession } from '@/lib/storageHelper';
+import { saveCurrentMitraSession, getCurrentMitraSession } from '@/lib/storageHelper';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -35,7 +35,7 @@ import { useToast } from '@/hooks/use-toast';
 export default function MitraVerification() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [mitra, setMitra] = useState<any>(() => getCurrentMitra());
+  const [mitra, setMitra] = useState<any>(() => getCurrentMitra() || getCurrentMitraSession());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showAppealForm, setShowAppealForm] = useState(false);
   const [appealPrice, setAppealPrice] = useState('');
@@ -51,7 +51,7 @@ export default function MitraVerification() {
 
   // Fungsi refresh status dari backend
   const fetchLatestStatus = useCallback(async (silent = false) => {
-    const current = getCurrentMitra();
+    const current = getCurrentMitra() || getCurrentMitraSession();
     if (!current?.email) return;
 
     if (!silent) setIsRefreshing(true);
