@@ -13,6 +13,7 @@ import { registerMitra } from "@/lib/mitraStore";
 import { getCurrentUser } from "@/lib/userStore";
 import { talents } from "@/data/mockData";
 import { saveCurrentMitraSession } from "@/lib/storageHelper";
+import { CitySelect } from "@/components/CitySelect";
 
 const categories = [
   "Travelling", "Nonton Film", "Kuliner", "Fotografi", "Gaming",
@@ -523,14 +524,17 @@ export default function MitraRegister() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="address">Alamat</Label>
-              <Input
+              <Label htmlFor="address">Kota Domisili / Lokasi Layanan</Label>
+              <CitySelect
                 id="address"
-                placeholder="Masukkan alamat lengkap"
+                placeholder="Pilih atau cari kota domisili..."
                 value={formData.address}
-                onChange={(e) => handleInputChange("address", e.target.value)}
+                onChange={(val) => handleInputChange("address", val)}
                 required
               />
+              <p className="text-xs text-muted-foreground">
+                Pilih dari daftar kota yang tersedia atau ketik untuk mencari. Jika kota Anda belum terdaftar, Anda dapat memilih opsi &ldquo;Gunakan [Kota Anda]&rdquo; atau ketik manual.
+              </p>
             </div>
           </div>
 

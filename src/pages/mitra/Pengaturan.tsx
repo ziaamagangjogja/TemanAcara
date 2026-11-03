@@ -57,6 +57,7 @@ import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { EarningsDetails } from "@/components/mitra/EarningsDetails";
 import { saveCurrentMitraSession, clearCurrentMitraSession } from "@/lib/storageHelper";
+import { CitySelect } from "@/components/CitySelect";
 
 export default function Pengaturan() {
   const navigate = useNavigate();
@@ -581,11 +582,11 @@ export default function Pengaturan() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Kota</label>
-                  <Input
+                  <label className="text-sm font-medium mb-2 block">Kota Domisili</label>
+                  <CitySelect
                     value={profileForm.city}
-                    onChange={(e) => setProfileForm(prev => ({ ...prev, city: e.target.value }))}
-                    placeholder="Contoh: Yogyakarta"
+                    onChange={(val) => setProfileForm(prev => ({ ...prev, city: val }))}
+                    placeholder="Pilih atau cari kota..."
                   />
                 </div>
                 <div>

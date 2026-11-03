@@ -11,48 +11,7 @@ import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { X } from "lucide-react";
-
-// PERUBAHAN: Ambil kota dari localStorage atau gunakan default
-const cities = (() => {
-  try {
-    const savedCities = localStorage.getItem("rentmate_cities");
-    if (savedCities) {
-      return JSON.parse(savedCities);
-    }
-    
-    // Default cities jika tidak ada di localStorage
-    return [
-      "Jakarta",
-      "Surabaya",
-      "Bandung",
-      "Medan",
-      "Semarang",
-      "Makassar",
-      "Palembang",
-      "Tangerang",
-      "Depok",
-      "Bekasi",
-      "Yogyakarta",
-      "Denpasar",
-      "Malang",
-      "Bogor",
-      "Batam",
-      "Pekanbaru",
-      "Bandar Lampung",
-      "Padang",
-      "Manado",
-      "Balikpapan",
-      "Solo",
-      "Cirebon",
-      "Pontianak",
-      "Samarinda",
-      "Banjarmasin",
-    ];
-  } catch (error) {
-    console.error("Error loading cities from localStorage:", error);
-    return [];
-  }
-})();
+import { getCities, subscribeToCities } from "@/lib/cityStore";
 
 const hobbies = [
   "Traveling",
@@ -110,22 +69,22 @@ export function FilterModal({ isOpen, onClose, filters, onApply }: FilterModalPr
     ...filters // Spread operator untuk menimpa dengan nilai dari props
   });
 
-  // PERUBAHAN: State untuk menyimpan daftar kota dari localStorage
-  const [availableCities, setAvailableCities] = useState<string[]>(cities);
+  // State untuk menyimpan daftar kota
+  const [availableCities, setAvailableCities] = useState<string[]>(() => getCities());
+
+  // Subscribe ke perubahan kota
+  useEffect(() => {
+    const unsubscribe = subscribeToCities((updatedCities) => {
+      setAvailableCities(updatedCities);
+    });
+    return unsubscribe;
+  }, []);
 
   // Reset local filters ketika modal dibuka dengan props terbaru
   useEffect(() => {
     if (isOpen) {
       setLocalFilters(filters);
-      // PERUBAHAN: Perbarui daftar kota dari localStorage setiap kali modal dibuka
-      try {
-        const savedCities = localStorage.getItem("rentmate_cities");
-        if (savedCities) {
-          setAvailableCities(JSON.parse(savedCities));
-        }
-      } catch (error) {
-        console.error("Error loading cities from localStorage:", error);
-      }
+      setAvailableCities(getCities());
     }
   }, [isOpen, filters]);
 

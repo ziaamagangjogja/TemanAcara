@@ -38,6 +38,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { RatingModal } from "@/components/RatingModal";
 import { SubmitComplaintModal } from "@/components/SubmitComplaintModal";
 import { WithdrawalModal } from "@/components/WithdrawalModal";
+import { CitySelect } from "@/components/CitySelect";
 import { talents } from "@/data/mockData";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import { useToast } from "@/hooks/use-toast";
@@ -688,11 +689,11 @@ export default function Profile() {
 
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
-                      <label className="text-sm font-medium mb-2 block">Kota</label>
-                      <Input
+                      <label className="text-sm font-medium mb-2 block">Kota Domisili</label>
+                      <CitySelect
                         value={editData.city}
-                        onChange={(e) => setEditData({ ...editData, city: e.target.value })}
-                        placeholder="Kota"
+                        onChange={(val) => setEditData({ ...editData, city: val })}
+                        placeholder="Pilih atau cari kota..."
                       />
                     </div>
                     <div>

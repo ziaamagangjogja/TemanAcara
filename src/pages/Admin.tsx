@@ -61,6 +61,7 @@ import { useAppSettings } from "@/contexts/AppSettingsContext";
 import { talents as mockTalents } from "@/data/mockData";
 import { compressImageFile } from "@/utils/imageCompressor";
 import { ComplaintChatModal } from "@/components/ComplaintChatModal";
+import { getCities, saveCities } from "@/lib/cityStore";
 
 import {
   SharedBooking,
@@ -330,47 +331,7 @@ export default function Admin() {
   const [selectedTransaction, setSelectedTransaction] = useState<SharedBooking | null>(null);
 
   // State untuk manajemen kota
-  const [cities, setCities] = useState<string[]>(() => {
-    try {
-      // Coba ambil dari localStorage, jika tidak ada gunakan default
-      const savedCities = localStorage.getItem("rentmate_cities");
-      if (savedCities) {
-        return JSON.parse(savedCities);
-      }
-
-      // Default cities jika tidak ada di localStorage
-      return [
-        "Jakarta",
-        "Surabaya",
-        "Bandung",
-        "Medan",
-        "Semarang",
-        "Makassar",
-        "Palembang",
-        "Tangerang",
-        "Depok",
-        "Bekasi",
-        "Yogyakarta",
-        "Denpasar",
-        "Malang",
-        "Bogor",
-        "Batam",
-        "Pekanbaru",
-        "Bandar Lampung",
-        "Padang",
-        "Manado",
-        "Balikpapan",
-        "Solo",
-        "Cirebon",
-        "Pontianak",
-        "Samarinda",
-        "Banjarmasin",
-      ];
-    } catch (error) {
-      console.error("Error loading cities from localStorage:", error);
-      return [];
-    }
-  });
+  const [cities, setCities] = useState<string[]>(() => getCities());
 
   const [newCity, setNewCity] = useState("");
   const [editingCity, setEditingCity] = useState<string | null>(null);
@@ -1231,7 +1192,7 @@ export default function Admin() {
     if (newCity.trim() && !cities.includes(newCity.trim())) {
       const updatedCities = [...cities, newCity.trim()];
       setCities(updatedCities);
-      localStorage.setItem("rentmate_cities", JSON.stringify(updatedCities));
+      saveCities(updatedCities);
       setNewCity("");
       toast({
         title: "Kota Ditambahkan",
@@ -1249,7 +1210,7 @@ export default function Admin() {
   const handleDeleteCity = useCallback((city: string) => {
     const updatedCities = cities.filter(c => c !== city);
     setCities(updatedCities);
-    localStorage.setItem("rentmate_cities", JSON.stringify(updatedCities));
+    saveCities(updatedCities);
     toast({
       title: "Kota Dihapus",
       description: `${city} telah dihapus dari daftar kota.`,
@@ -1265,7 +1226,7 @@ export default function Admin() {
     if (editedCityName.trim() && !cities.includes(editedCityName.trim()) && editedCityName.trim() !== editingCity) {
       const updatedCities = cities.map(c => c === editingCity ? editedCityName.trim() : c);
       setCities(updatedCities);
-      localStorage.setItem("rentmate_cities", JSON.stringify(updatedCities));
+      saveCities(updatedCities);
       setEditingCity(null);
       setEditedCityName("");
       toast({
