@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCurrentMitra, logoutMitra } from '@/lib/mitraStore';
 import { saveCurrentMitraSession } from '@/lib/storageHelper';
@@ -316,7 +316,7 @@ export default function MitraVerification() {
               <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1">
                 <h1 className="text-xl font-bold truncate">{mitra?.name || mitra?.full_name || "Calon Mitra"}</h1>
                 {isApproved && (
-                  <Badge className="bg-emerald-500 hover:bg-emerald-600 text-white gap-1 text-[11px]">
+                  <Badge className="bg-orange-600 hover:bg-orange-700 text-white gap-1 text-[11px]">
                     <CheckCircle2 className="w-3 h-3" /> Disetujui Admin
                   </Badge>
                 )}
@@ -345,8 +345,8 @@ export default function MitraVerification() {
                     Ekspektasi: {mitra.price_expectation}
                   </span>
                 )}
-                <span className="bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3" /> KTP Terenkripsi
+                <span className="bg-orange-50 text-orange-800 border border-orange-200 px-2 py-0.5 rounded-md flex items-center gap-1 font-medium">
+                  <ShieldCheck className="w-3 h-3 text-orange-600" /> KTP Terenkripsi
                 </span>
               </div>
             </div>
@@ -361,13 +361,13 @@ export default function MitraVerification() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             
             {/* Step 1 */}
-            <div className="flex items-start gap-3 p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50">
-              <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0 font-bold text-sm shadow-sm">
+            <div className="flex items-start gap-3 p-3 rounded-xl bg-orange-50/70 border border-orange-200">
+              <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center shrink-0 font-bold text-sm shadow-sm">
                 <Check className="w-4 h-4" />
               </div>
               <div>
-                <p className="font-semibold text-xs text-emerald-950 dark:text-emerald-200">1. Berkas Terkirim</p>
-                <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                <p className="font-semibold text-xs text-orange-950">1. Berkas Terkirim</p>
+                <p className="text-[11px] text-orange-800 mt-0.5">
                   Formulir pendaftaran dan identitas berhasil diarsipkan.
                 </p>
               </div>
@@ -376,14 +376,14 @@ export default function MitraVerification() {
             {/* Step 2 */}
             <div className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${
               isApproved
-                ? 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/50'
+                ? 'bg-orange-50/70 border-orange-300'
                 : isRejected
                 ? 'bg-rose-50/60 border-rose-200 text-rose-900'
                 : 'bg-amber-50/70 border-amber-300 ring-2 ring-amber-400/20 shadow-sm'
             }`}>
               <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 font-bold text-sm shadow-sm ${
                 isApproved
-                  ? 'bg-emerald-500 text-white'
+                  ? 'bg-orange-600 text-white'
                   : isRejected
                   ? 'bg-rose-500 text-white'
                   : 'bg-amber-500 text-white animate-pulse'
