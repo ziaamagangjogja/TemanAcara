@@ -42,11 +42,10 @@ const SPECIALIST_SKILLS = [
 ];
 
 const PRICE_OPTIONS = [
-  { value: "Rp 100.000 - Rp 150.000", label: "Rp 100.000 - Rp 150.000", recommendedFor: "kasual", autoTier: "kasual" },
-  { value: "Rp 150.000 - Rp 250.000", label: "Rp 150.000 - Rp 250.000", recommendedFor: "kasual", autoTier: "kasual" },
-  { value: "Rp 250.000 - Rp 350.000", label: "Rp 250.000 - Rp 350.000", recommendedFor: "acara", autoTier: "acara" },
-  { value: "Rp 350.000 - Rp 500.000", label: "Rp 350.000 - Rp 500.000", recommendedFor: "spesialis", autoTier: "spesialis" },
-  { value: "> Rp 500.000", label: "> Rp 500.000", recommendedFor: "spesialis", autoTier: "spesialis" },
+  { value: "Rp 100.000 - Rp 200.000", label: "Rp 100.000 - Rp 200.000", recommendedFor: ["kasual"], autoTier: "kasual" },
+  { value: "Rp 200.000 - Rp 350.000", label: "Rp 200.000 - Rp 350.000", recommendedFor: ["acara"], autoTier: "acara" },
+  { value: "Rp 350.000 - Rp 500.000", label: "Rp 350.000 - Rp 500.000", recommendedFor: ["spesialis"], autoTier: "spesialis" },
+  { value: "> Rp 500.000", label: "> Rp 500.000 (VIP)", recommendedFor: ["spesialis"], autoTier: "spesialis" },
 ];
 
 const SERVICE_TYPE_DETAILS: Record<string, {
@@ -57,12 +56,12 @@ const SERVICE_TYPE_DETAILS: Record<string, {
   kasual: {
     title: "Kasual & Santai",
     summary: "Teman ngobrol, ngopi di kafe, nonton bioskop, kulineran, atau jalan santai di mall.",
-    defaultPrice: "Rp 150.000 - Rp 250.000",
+    defaultPrice: "Rp 100.000 - Rp 200.000",
   },
   acara: {
     title: "Acara & Sosial",
     summary: "Partner pendamping kondangan, wisuda, gathering kantor, reuni, atau pesta sosial.",
-    defaultPrice: "Rp 250.000 - Rp 350.000",
+    defaultPrice: "Rp 200.000 - Rp 350.000",
   },
   spesialis: {
     title: "Spesialis / Pro",
@@ -886,11 +885,11 @@ export default function MitraRegister() {
                 </span>
               </div>
 
-              {/* Pilihan Tarif Bersih (Grid Pill Cards) */}
+              {/* Pilihan Tarif Bersih (Grid 2x2 Sempurna) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {PRICE_OPTIONS.map((item) => {
                   const isSelected = formData.priceExpectation === item.value;
-                  const isRecommended = item.recommendedFor === formData.experienceLevel;
+                  const isRecommended = item.recommendedFor.includes(formData.experienceLevel);
 
                   return (
                     <button
@@ -902,21 +901,21 @@ export default function MitraRegister() {
                           handleInputChange("experienceLevel", item.autoTier);
                         }
                       }}
-                      className={`flex items-center justify-between p-2.5 rounded-xl border text-xs transition-all ${
+                      className={`flex items-center justify-between p-3 rounded-xl border text-xs transition-all ${
                         isSelected
                           ? "border-orange-500 bg-orange-50/90 text-orange-950 font-semibold ring-1 ring-orange-500 shadow-xs"
                           : "border-border bg-card text-foreground hover:border-orange-300 hover:bg-orange-50/30"
                       }`}
                     >
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-xs">{item.label}</span>
-                        <span className="text-[10px] text-muted-foreground">/ jam</span>
+                      <div className="flex items-baseline gap-1.5 min-w-0 pr-1">
+                        <span className="font-semibold text-xs whitespace-nowrap">{item.label}</span>
+                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">/ jam</span>
                       </div>
 
                       {isRecommended && (
                         <span
                           title="Rekomendasi sesuai tipe layanan Anda"
-                          className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.5 rounded-full"
+                          className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.5 rounded-full shrink-0"
                         >
                           <Sparkles className="w-3 h-3 text-orange-500" />
                         </span>
