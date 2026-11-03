@@ -1464,24 +1464,62 @@ export default function Admin() {
       return;
     }
 
-    // Hitung rekomendasi tier & harga otomatis berdasarkan kategori & tingkat kesiapan layanan
-    const exp = mitra.experience_level || "acara";
+    // Hitung rekomendasi tier & tarif awal otomatis berdasarkan pilihan ekspektasi tarif & keahlian calon mitra
+    const exp = (mitra.experience_level || "").toLowerCase();
+    const priceExp = (mitra.price_expectation || "");
     const cat = (mitra.category || "").toLowerCase();
-    let defaultTier = "tier2";
-    let defaultPrice = "300000";
 
-    if (cat.includes("foto") || cat.includes("video") || cat.includes("tour") || cat.includes("hiking") || exp === "spesialis" || exp === "mahir") {
+    let defaultTier = "tier2";
+    let defaultPrice = "250000";
+
+    // Prioritaskan ekspektasi tarif yang dipilih langsung oleh calon mitra saat pendaftaran
+    if (
+      priceExp.includes("100.000") ||
+      (priceExp.includes("200.000") && !priceExp.includes("350.000")) ||
+      exp === "kasual" ||
+      exp === "pemula"
+    ) {
+      defaultTier = "tier1";
+      defaultPrice = "150000";
+    } else if (
+      priceExp.includes("350.000") ||
+      (priceExp.includes("500.000") && !priceExp.includes(">")) ||
+      exp === "spesialis" ||
+      exp === "mahir" ||
+      cat.includes("foto") ||
+      cat.includes("video") ||
+      cat.includes("gym") ||
+      cat.includes("coach") ||
+      cat.includes("tour")
+    ) {
       defaultTier = "tier3";
       defaultPrice = "400000";
-    } else if (exp === "kasual" || exp === "pemula") {
-      defaultTier = "tier1";
-      defaultPrice = "225000";
+    } else if (priceExp.includes(">") || priceExp.includes("500.000") || exp === "vip") {
+      defaultTier = "tier4";
+      defaultPrice = "500000";
+    } else {
+      // Default: Tier 2 (Acara & Sosial: Rp 200.000 - Rp 350.000)
+      defaultTier = "tier2";
+      defaultPrice = "250000";
     }
 
+    // Jika mitra memiliki harga banding atau harga yang telah diajukan spesifik
+    const finalInitialPrice = (mitra.price && Number(mitra.price) > 0) ? String(mitra.price) : defaultPrice;
+
     setSelectedTalentForPrice(mitra);
-    setSelectedPricingTier(mitra.pricing_tier || defaultTier);
-    setTalentPrice(mitra.price && mitra.price > 0 ? String(mitra.price) : defaultPrice);
-    setAdminPriceNotes("");
+    setSelectedPricingTier(defaultTier);
+    setTalentPrice(finalInitialPrice);
+    setAdminPriceNotes(
+      `Disetujui ${
+        defaultTier === "tier3"
+          ? "Tier 3 (Spesialis & Pro)"
+          : defaultTier === "tier4"
+          ? "Tier 4 (VIP / Eksklusif)"
+          : defaultTier === "tier1"
+          ? "Tier 1 (Kasual & Santai)"
+          : "Tier 2 (Acara & Sosial)"
+      } sesuai kualifikasi dan ekspektasi mitra.`
+    );
     setVerificationChecklist({ ktpValid: true, profileValid: true, skillValid: true });
     setShowPriceDialog(true);
   };
@@ -5324,135 +5362,138 @@ export default function Admin() {
 
       {/* Dialog Verifikasi & Penetapan Tarif Berbasis Rubrik */}
       <Dialog open={showPriceDialog} onOpenChange={(open) => !open && setShowPriceDialog(false)}>
-        <DialogContent className="max-w-xl max-h-[92vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-lg font-bold">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-6 sm:p-7">
+          <DialogHeader className="pb-2 border-b">
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold">
               <Award className="w-5 h-5 text-orange-500" />
-              Verifikasi & Penetapan Tarif Mitra
+              Detail & Persetujuan Tarif Calon Mitra
             </DialogTitle>
             <p className="text-xs text-muted-foreground">
-              Evaluasi kualifikasi mitra dan tetapkan tarif resmi per jam berdasarkan standar rubrik platform.
+              Tinjau data calon mitra dan tentukan tarif per jam resmi sebelum menerbitkan profil ke pencarian publik.
             </p>
           </DialogHeader>
 
           {selectedTalentForPrice && (
-            <div className="space-y-4">
+            <div className="space-y-4 pt-2">
               {/* Highlight Permohonan Banding jika ada */}
               {selectedTalentForPrice.appeal_note && (
-                <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200 space-y-1.5 shadow-xs animate-in fade-in">
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-300 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200 space-y-1.5 shadow-xs animate-in fade-in">
                   <div className="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
-                    <Scale className="w-4 h-4" />
-                    Permohonan Banding / Negosiasi dari Calon Mitra:
+                    <Scale className="w-4 h-4 text-amber-600" />
+                    Permohonan Banding Tarif dari Calon Mitra:
                   </div>
-                  <p className="whitespace-pre-line leading-relaxed font-medium bg-white/70 dark:bg-black/20 p-2.5 rounded-lg border border-amber-200 dark:border-amber-900/50">
+                  <p className="whitespace-pre-line leading-relaxed font-medium bg-background/80 p-2.5 rounded-lg border border-amber-200">
                     {selectedTalentForPrice.appeal_note}
                   </p>
-                </div>
-              )}
-
-              {/* Profil & Dokumen Mitra */}
-              <div className="p-4 rounded-xl border bg-muted/20 space-y-3">
-                <div className="flex items-center gap-3.5">
-                  <img
-                    src={selectedTalentForPrice.photo}
-                    alt={selectedTalentForPrice.name}
-                    className="w-14 h-14 rounded-full object-cover border-2 border-background shadow-md shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-base font-bold text-foreground truncate">{selectedTalentForPrice.name}</h3>
-                      {selectedTalentForPrice.age && (
-                        <span className="text-xs text-muted-foreground">{selectedTalentForPrice.age} Tahun</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground truncate">{selectedTalentForPrice.email} • {selectedTalentForPrice.phone || "-"}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{selectedTalentForPrice.address || "Indonesia"}</p>
-                  </div>
-                </div>
-
-                {/* Parameter Penilaian Calon Mitra */}
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t text-xs">
-                  <div className="bg-background p-2.5 rounded-lg border">
-                    <span className="text-muted-foreground block text-[11px]">Kategori Layanan Utama:</span>
-                    <Badge variant="outline" className="mt-1 font-semibold text-orange-600 border-orange-200 bg-orange-50/50">
-                      {selectedTalentForPrice.experience_level === "spesialis" || selectedTalentForPrice.experience_level === "mahir"
-                        ? "Keahlian Khusus / Spesialis"
-                        : selectedTalentForPrice.experience_level === "kasual" || selectedTalentForPrice.experience_level === "pemula"
-                        ? "Teman Kasual / Santai"
-                        : "Pendamping Acara & Sosial"}
-                    </Badge>
-                  </div>
-                  <div className="bg-background p-2.5 rounded-lg border">
-                    <span className="text-muted-foreground block text-[11px]">Ekspektasi Tarif Mitra:</span>
-                    <span className="font-semibold text-foreground block mt-1">
-                      {selectedTalentForPrice.price_expectation || "Rp 250.000 - Rp 350.000"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Kategori, Medsos, dan KTP */}
-                <div className="space-y-1 text-xs pt-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">Kategori:</span>
-                    <span className="font-medium text-foreground">{selectedTalentForPrice.category || "Teman Acara"}</span>
-                  </div>
-                  {selectedTalentForPrice.social_media && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground">Media Sosial:</span>
-                      <span className="font-medium text-blue-600 truncate">{selectedTalentForPrice.social_media}</span>
-                    </div>
-                  )}
-                  {selectedTalentForPrice.verificationDocuments?.ktp && (
-                    <div className="pt-1.5">
+                  {selectedTalentForPrice.appeal_file && (
+                    <div className="pt-1 flex items-center gap-2">
+                      <ExternalLink className="w-3.5 h-3.5 text-amber-700" />
                       <a
-                        href={selectedTalentForPrice.verificationDocuments.ktp}
+                        href={selectedTalentForPrice.appeal_file}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs text-primary font-medium hover:underline bg-primary/5 px-2.5 py-1 rounded-md border border-primary/20"
+                        className="text-primary font-semibold hover:underline"
                       >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        Periksa Dokumen KTP di Google Drive ↗
+                        Lihat Berkas / Bukti Banding Calon Mitra ↗
                       </a>
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Ringkasan Profil Calon Mitra */}
+              <div className="p-4 rounded-2xl border bg-card shadow-xs flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-left">
+                <img
+                  src={selectedTalentForPrice.photo}
+                  alt={selectedTalentForPrice.name}
+                  onClick={() => setPreviewPhotoModal({ isOpen: true, url: selectedTalentForPrice.photo, title: selectedTalentForPrice.name })}
+                  className="w-16 h-16 rounded-2xl object-cover object-top border-2 border-orange-200 shadow-sm shrink-0 cursor-pointer hover:opacity-90 transition-opacity"
+                  title="Klik untuk melihat foto ukuran penuh"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                    <h3 className="text-base font-bold text-foreground">{selectedTalentForPrice.name}</h3>
+                    {selectedTalentForPrice.age && (
+                      <Badge variant="outline" className="text-[10px] font-normal">
+                        {selectedTalentForPrice.age} Tahun
+                      </Badge>
+                    )}
+                    <Badge variant="secondary" className="text-[10px] bg-orange-50 text-orange-800 border border-orange-200">
+                      {selectedTalentForPrice.address || "Indonesia"}
+                    </Badge>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                    {selectedTalentForPrice.email} • {selectedTalentForPrice.phone || "-"}
+                  </p>
+
+                  <div className="flex flex-wrap items-center justify-center sm:justify-start gap-1.5 mt-2.5">
+                    <span className="text-[11px] text-muted-foreground font-medium">Keahlian:</span>
+                    <span className="text-[11px] font-semibold text-foreground bg-muted px-2 py-0.5 rounded-md border">
+                      {selectedTalentForPrice.category || "Teman Acara"}
+                    </span>
+                    {selectedTalentForPrice.social_media && (
+                      <span className="text-[11px] text-primary bg-primary/5 px-2 py-0.5 rounded-md border border-primary/20">
+                        {selectedTalentForPrice.social_media}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Tombol Dokumen KTP & Portofolio */}
+                  <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mt-3 pt-2 border-t text-xs">
+                    {selectedTalentForPrice.verificationDocuments?.ktp ? (
+                      <a
+                        href={selectedTalentForPrice.verificationDocuments.ktp}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-primary font-medium hover:underline bg-primary/5 px-2.5 py-1 rounded-lg border border-primary/20"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Dokumen KTP di Google Drive ↗
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground text-xs italic">KTP: Belum terlampir</span>
+                    )}
+
+                    {selectedTalentForPrice.portfolio_file && (
+                      <a
+                        href={selectedTalentForPrice.portfolio_file}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-orange-700 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-200 font-medium hover:underline"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Berkas Portofolio Mitra ↗
+                      </a>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              {/* Checklist Kelayakan Verifikasi */}
-              <div className="p-3 rounded-xl border bg-card space-y-2">
-                <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  Checklist Kelayakan Verifikasi Admin
-                </Label>
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={verificationChecklist.ktpValid}
-                      onChange={(e) => setVerificationChecklist(prev => ({ ...prev, ktpValid: e.target.checked }))}
-                      className="rounded text-orange-500 focus:ring-orange-500"
-                    />
-                    <span>KTP Asli, terbaca jelas, dan umur memenuhi syarat platform (&ge; 17 tahun)</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={verificationChecklist.profileValid}
-                      onChange={(e) => setVerificationChecklist(prev => ({ ...prev, profileValid: e.target.checked }))}
-                      className="rounded text-orange-500 focus:ring-orange-500"
-                    />
-                    <span>Data profil, kontak telepon, dan foto representatif profesional</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={verificationChecklist.skillValid}
-                      onChange={(e) => setVerificationChecklist(prev => ({ ...prev, skillValid: e.target.checked }))}
-                      className="rounded text-orange-500 focus:ring-orange-500"
-                    />
-                    <span>Kategori dan tingkat pengalaman sesuai standar pelayanan platform</span>
-                  </label>
+              {/* Callout Banner: Ekspektasi Tarif Mitra */}
+              <div className="p-3.5 rounded-xl bg-orange-500/10 border border-orange-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-1.5 font-bold text-orange-950">
+                    <Sparkles className="w-4 h-4 text-orange-600" />
+                    Pilihan Ekspektasi Calon Mitra:
+                    <span className="text-orange-600 underline ml-0.5">
+                      {selectedTalentForPrice.price_expectation || "Rp 200.000 - Rp 350.000"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-orange-800">
+                    Kategori Layanan:{" "}
+                    <strong>
+                      {selectedTalentForPrice.experience_level === "spesialis" || selectedTalentForPrice.experience_level === "mahir"
+                        ? "Keahlian Khusus / Spesialis"
+                        : selectedTalentForPrice.experience_level === "kasual" || selectedTalentForPrice.experience_level === "pemula"
+                        ? "Kasual & Santai"
+                        : "Acara & Sosial"}
+                    </strong>
+                  </p>
                 </div>
+                <Badge className="bg-orange-600 hover:bg-orange-700 text-white shrink-0 self-start sm:self-auto text-[10px]">
+                  ✨ Rekomendasi Terpilih
+                </Badge>
               </div>
 
               {/* Rubrik Standar Tier Tarif RentMate */}
@@ -5464,12 +5505,12 @@ export default function Admin() {
                   <span className="text-[11px] text-muted-foreground">Pilih tier untuk mengisi tarif otomatis</span>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   {[
-                    { id: "tier1", name: "Tier 1: Kasual", price: 225000, desc: "Hangout santai, ngopi, kuliner, nonton" },
-                    { id: "tier2", name: "Tier 2: Acara & Sosial", price: 300000, desc: "Kondangan, gathering, event keluarga" },
-                    { id: "tier3", name: "Tier 3: Spesialis / Pro", price: 400000, desc: "Keahlian khusus (foto/tour/olahraga)" },
-                    { id: "tier4", name: "Tier 4: VIP / All-in", price: 500000, desc: "Acara formal, fleksibilitas tinggi" },
+                    { id: "tier1", name: "Tier 1: Kasual", range: "100k - 200k", price: 150000, desc: "Hangout santai & kuliner" },
+                    { id: "tier2", name: "Tier 2: Acara & Sosial", range: "200k - 350k", price: 250000, desc: "Kondangan, gathering" },
+                    { id: "tier3", name: "Tier 3: Spesialis / Pro", range: "350k - 500k", price: 400000, desc: "Foto, gym, tour, coach" },
+                    { id: "tier4", name: "Tier 4: VIP / Eksklusif", range: "> 500k", price: 500000, desc: "Event formal & VIP" },
                   ].map((t) => (
                     <button
                       key={t.id}
@@ -5478,22 +5519,28 @@ export default function Admin() {
                         setSelectedPricingTier(t.id);
                         setTalentPrice(String(t.price));
                       }}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
+                      className={`p-3 rounded-xl border text-left transition-all relative ${
                         selectedPricingTier === t.id
-                          ? "border-orange-500 bg-orange-50/70 ring-1 ring-orange-500 shadow-xs"
-                          : "border-border hover:border-gray-300 bg-card"
+                          ? "border-orange-500 bg-orange-50/80 ring-2 ring-orange-500/40 shadow-xs"
+                          : "border-border hover:border-orange-300 bg-card hover:bg-muted/20"
                       }`}
                     >
+                      {selectedPricingTier === t.id && (
+                        <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-orange-500" />
+                      )}
                       <div className="text-[11px] font-bold text-foreground leading-tight">{t.name}</div>
-                      <div className="text-sm font-extrabold text-orange-600 mt-1">{formatCurrency(t.price)}/jam</div>
-                      <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2 leading-tight">{t.desc}</p>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">{t.range}</div>
+                      <div className="text-sm font-extrabold text-orange-600 mt-1">
+                        {formatCurrency(t.price)}
+                        <span className="text-[10px] font-normal text-muted-foreground">/jam</span>
+                      </div>
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* Penyesuaian Harga Final & Catatan Admin */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-muted/30 rounded-xl border">
                 <div>
                   <Label htmlFor="talent-price-input" className="text-xs font-semibold mb-1 block">
                     Tarif Resmi per Jam (Rp)
@@ -5506,12 +5553,12 @@ export default function Admin() {
                       placeholder="Masukkan tarif per jam"
                       value={talentPrice}
                       onChange={(e) => setTalentPrice(e.target.value)}
-                      className="pl-9 h-10 font-bold text-sm"
+                      className="pl-9 h-10 font-bold text-base"
                       min={10000}
                     />
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Tarif ini yang akan dibayar oleh pengguna saat memesan mitra.
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Tarif resmi yang dibayarkan klien saat booking mitra.
                   </p>
                 </div>
 
@@ -5521,20 +5568,55 @@ export default function Admin() {
                   </Label>
                   <Input
                     id="admin-price-notes"
-                    placeholder="Contoh: Disetujui Tier 2 sesuai pengalaman 2 tahun"
+                    placeholder="Contoh: Disetujui Tier 3 sesuai portofolio & ekspektasi"
                     value={adminPriceNotes}
                     onChange={(e) => setAdminPriceNotes(e.target.value)}
                     className="h-10 text-xs"
                   />
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Dasar pertimbangan penetapan tarif untuk arsip laporan.
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Catatan arsip dan pertimbangan yang dikirim ke calon mitra.
                   </p>
                 </div>
+              </div>
+
+              {/* Checklist Kelayakan Verifikasi Ramping */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-muted/40 rounded-xl border text-[11px]">
+                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-orange-600" />
+                  Checklist Kelayakan Admin:
+                </span>
+                <label className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={verificationChecklist.ktpValid}
+                    onChange={(e) => setVerificationChecklist(prev => ({ ...prev, ktpValid: e.target.checked }))}
+                    className="rounded text-orange-500 focus:ring-orange-500"
+                  />
+                  <span>KTP Asli (≥17 thn)</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={verificationChecklist.profileValid}
+                    onChange={(e) => setVerificationChecklist(prev => ({ ...prev, profileValid: e.target.checked }))}
+                    className="rounded text-orange-500 focus:ring-orange-500"
+                  />
+                  <span>Profil & Foto Sesuai</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={verificationChecklist.skillValid}
+                    onChange={(e) => setVerificationChecklist(prev => ({ ...prev, skillValid: e.target.checked }))}
+                    className="rounded text-orange-500 focus:ring-orange-500"
+                  />
+                  <span>Kategori & Layanan Valid</span>
+                </label>
               </div>
             </div>
           )}
 
-          <DialogFooter className="gap-2 pt-2 sm:gap-0">
+          <DialogFooter className="gap-2 pt-3 border-t sm:gap-0">
             <Button variant="outline" onClick={() => setShowPriceDialog(false)}>
               Batal
             </Button>
@@ -5546,7 +5628,7 @@ export default function Admin() {
                 !verificationChecklist.ktpValid ||
                 !verificationChecklist.profileValid
               }
-              className="bg-orange-500 hover:bg-orange-600 text-white font-semibold gap-1.5"
+              className="bg-orange-500 hover:bg-orange-600 text-white font-semibold gap-1.5 shadow-sm"
             >
               <CheckCircle className="w-4 h-4" />
               Setujui & Terbitkan Profil Mitra
