@@ -41,29 +41,33 @@ const SPECIALIST_SKILLS = [
   "Penerjemah Bahasa",
 ];
 
+const PRICE_OPTIONS = [
+  { value: "Rp 100.000 - Rp 150.000", label: "Rp 100.000 - Rp 150.000", recommendedFor: "kasual", autoTier: "kasual" },
+  { value: "Rp 150.000 - Rp 250.000", label: "Rp 150.000 - Rp 250.000", recommendedFor: "kasual", autoTier: "kasual" },
+  { value: "Rp 250.000 - Rp 350.000", label: "Rp 250.000 - Rp 350.000", recommendedFor: "acara", autoTier: "acara" },
+  { value: "Rp 350.000 - Rp 500.000", label: "Rp 350.000 - Rp 500.000", recommendedFor: "spesialis", autoTier: "spesialis" },
+  { value: "> Rp 500.000", label: "> Rp 500.000", recommendedFor: "spesialis", autoTier: "spesialis" },
+];
+
 const SERVICE_TYPE_DETAILS: Record<string, {
   title: string;
-  description: string;
-  examples: string;
-  suggestedPrice: string;
+  summary: string;
+  defaultPrice: string;
 }> = {
   kasual: {
-    title: "Teman Kasual & Santai",
-    description: "Fokus pada aktivitas santai sehari-hari untuk teman ngobrol, eksplorasi kuliner, ngopi di kafe, nonton film di bioskop, atau jalan-jalan santai di mall/taman kota.",
-    examples: "Teman ngopi, kulineran, nonton bioskop, shopping buddy, jalan santai.",
-    suggestedPrice: "Rp 200.000 - Rp 250.000",
+    title: "Kasual & Santai",
+    summary: "Teman ngobrol, ngopi di kafe, nonton bioskop, kulineran, atau jalan santai di mall.",
+    defaultPrice: "Rp 150.000 - Rp 250.000",
   },
   acara: {
-    title: "Pendamping Acara & Sosial",
-    description: "Menemani klien menghadiri acara semi-formal atau perayaan sosial agar klien memiliki partner yang nyaman, percaya diri, dan sopan di depan umum.",
-    examples: "Kondangan pernikahan, partner wisuda, gathering kantor, reuni keluarga/teman, pesta.",
-    suggestedPrice: "Rp 250.000 - Rp 350.000",
+    title: "Acara & Sosial",
+    summary: "Partner pendamping kondangan, wisuda, gathering kantor, reuni, atau pesta sosial.",
+    defaultPrice: "Rp 250.000 - Rp 350.000",
   },
   spesialis: {
-    title: "Keahlian Khusus & Spesialis",
-    description: "Layanan berbasis keahlian spesifik yang Anda kuasai, membutuhkan keterampilan praktis khusus untuk memandu atau mendampingi klien.",
-    examples: "Pemandu wisata/tour guide lokal, fotografer hunting foto, partner olahraga/gym, mabar game.",
-    suggestedPrice: "Rp 350.000 - Rp 450.000",
+    title: "Spesialis / Pro",
+    summary: "Layanan berbasis keterampilan teruji (fotografer, pelatih gym, tour guide, dll).",
+    defaultPrice: "Rp 350.000 - Rp 500.000",
   },
 };
 
@@ -831,73 +835,96 @@ export default function MitraRegister() {
 
             {/* Tipe Layanan Utama */}
             <div className="space-y-2">
-              <Label className="font-medium text-sm">Tipe Layanan Utama</Label>
+              <Label className="font-semibold text-xs sm:text-sm text-foreground">
+                Tipe Layanan Utama
+              </Label>
               <div className="grid grid-cols-3 gap-2">
                 {[
                   { id: "kasual", title: "Kasual & Santai" },
                   { id: "acara", title: "Acara & Sosial" },
                   { id: "spesialis", title: "Spesialis / Pro" },
-                ].map((tier) => (
-                  <button
-                    key={tier.id}
-                    type="button"
-                    onClick={() => {
-                      handleInputChange("experienceLevel", tier.id);
-                      const detail = SERVICE_TYPE_DETAILS[tier.id];
-                      if (detail) {
-                        handleInputChange("priceExpectation", detail.suggestedPrice);
-                      }
-                    }}
-                    className={`py-2 px-2 rounded-lg border text-xs font-medium text-center transition-all ${
-                      formData.experienceLevel === tier.id
-                        ? "border-orange-500 bg-orange-50 text-orange-600 font-semibold ring-1 ring-orange-500 shadow-xs"
-                        : "border-border hover:bg-muted/50 text-muted-foreground bg-card"
-                    }`}
-                  >
-                    {tier.title}
-                  </button>
-                ))}
+                ].map((tier) => {
+                  const isSelected = formData.experienceLevel === tier.id;
+                  return (
+                    <button
+                      key={tier.id}
+                      type="button"
+                      onClick={() => {
+                        handleInputChange("experienceLevel", tier.id);
+                        const detail = SERVICE_TYPE_DETAILS[tier.id];
+                        if (detail) {
+                          handleInputChange("priceExpectation", detail.defaultPrice);
+                        }
+                      }}
+                      className={`py-2 px-2 rounded-xl border text-xs font-medium text-center transition-all ${
+                        isSelected
+                          ? "border-orange-500 bg-orange-500 text-white font-semibold shadow-xs ring-1 ring-orange-500"
+                          : "border-border hover:bg-muted/50 text-muted-foreground bg-card hover:border-orange-200"
+                      }`}
+                    >
+                      {tier.title}
+                    </button>
+                  );
+                })}
               </div>
 
-              {/* Penjelasan Detail Tipe Layanan yang Dipilih */}
-              {SERVICE_TYPE_DETAILS[formData.experienceLevel] && (
-                <div className="p-3 bg-orange-50/70 border border-orange-200/90 rounded-xl text-xs space-y-1.5 animate-in fade-in duration-200">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-orange-950 flex items-center gap-1.5">
-                      <Info className="w-3.5 h-3.5 text-orange-600 shrink-0" />
-                      {SERVICE_TYPE_DETAILS[formData.experienceLevel].title}
-                    </span>
-                    <span className="text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-2 py-0.5 rounded-full border border-orange-200/60">
-                      Rekomendasi: {SERVICE_TYPE_DETAILS[formData.experienceLevel].suggestedPrice}
-                    </span>
-                  </div>
-                  <p className="text-muted-foreground text-xs leading-relaxed">
-                    {SERVICE_TYPE_DETAILS[formData.experienceLevel].description}
-                  </p>
-                  <div className="pt-1.5 border-t border-orange-200/60 flex items-start gap-1 text-[11px] text-orange-900/90">
-                    <span className="font-semibold shrink-0">Contoh Kegiatan:</span>
-                    <span className="italic">{SERVICE_TYPE_DETAILS[formData.experienceLevel].examples}</span>
-                  </div>
-                </div>
-              )}
+              {/* Penjelasan Ringkas & Bersih (1 kalimat tanpa box tebal yang penuh) */}
+              <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
+                {SERVICE_TYPE_DETAILS[formData.experienceLevel]?.summary}
+              </p>
             </div>
 
-            {/* Ekspektasi Tarif */}
-            <div className="space-y-1.5">
-              <Label htmlFor="priceExpectation" className="font-medium text-sm">
-                Ekspektasi Tarif per Jam
-              </Label>
-              <select
-                id="priceExpectation"
-                value={formData.priceExpectation}
-                onChange={(e) => handleInputChange("priceExpectation", e.target.value)}
-                className="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-1 focus:ring-orange-500"
-              >
-                <option value="Rp 200.000 - Rp 250.000">Rp 200.000 - Rp 250.000 / jam (Kasual)</option>
-                <option value="Rp 250.000 - Rp 350.000">Rp 250.000 - Rp 350.000 / jam (Rekomendasi)</option>
-                <option value="Rp 350.000 - Rp 450.000">Rp 350.000 - Rp 450.000 / jam (Spesialis)</option>
-                <option value="> Rp 450.000">&gt; Rp 450.000 / jam (VIP)</option>
-              </select>
+            {/* Ekspektasi Tarif per Jam (Mulai 100k - 500k dengan Ikon Gemini / Sparkle) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="priceExpectation" className="font-semibold text-xs sm:text-sm text-foreground">
+                  Ekspektasi Tarif per Jam
+                </Label>
+                <span className="text-[11px] text-orange-700 bg-orange-50 border border-orange-200/60 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium">
+                  <Sparkles className="w-3 h-3 text-orange-500" />
+                  Rekomendasi
+                </span>
+              </div>
+
+              {/* Pilihan Tarif Bersih (Grid Pill Cards) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {PRICE_OPTIONS.map((item) => {
+                  const isSelected = formData.priceExpectation === item.value;
+                  const isRecommended = item.recommendedFor === formData.experienceLevel;
+
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => {
+                        handleInputChange("priceExpectation", item.value);
+                        if (item.autoTier && formData.experienceLevel !== item.autoTier) {
+                          handleInputChange("experienceLevel", item.autoTier);
+                        }
+                      }}
+                      className={`flex items-center justify-between p-2.5 rounded-xl border text-xs transition-all ${
+                        isSelected
+                          ? "border-orange-500 bg-orange-50/90 text-orange-950 font-semibold ring-1 ring-orange-500 shadow-xs"
+                          : "border-border bg-card text-foreground hover:border-orange-300 hover:bg-orange-50/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium text-xs">{item.label}</span>
+                        <span className="text-[10px] text-muted-foreground">/ jam</span>
+                      </div>
+
+                      {isRecommended && (
+                        <span
+                          title="Rekomendasi sesuai tipe layanan Anda"
+                          className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.5 rounded-full"
+                        >
+                          <Sparkles className="w-3 h-3 text-orange-500" />
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Akun Media Sosial / Portofolio */}
