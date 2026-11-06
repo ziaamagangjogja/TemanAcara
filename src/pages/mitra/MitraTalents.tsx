@@ -23,7 +23,6 @@ const SORT_OPTIONS = [
   { value: "rating", label: "Penilaian Tertinggi" },
   { value: "price-low", label: "Harga Terendah" },
   { value: "price-high", label: "Harga Tertinggi" },
-  { value: "reviews", label: "Ulasan Terbanyak" },
 ] as const;
 
 // Pre-generate availability labels
@@ -345,17 +344,6 @@ export default function MitraTalents() {
         break;
       case "price-high":
         sortedTalents.sort((a, b) => (b.price || 0) - (a.price || 0));
-        break;
-      case "reviews":
-        sortedTalents.sort((a, b) => {
-          const revA = getTalentReviewStats(a).reviewCount;
-          const revB = getTalentReviewStats(b).reviewCount;
-          if (revB !== revA) return revB - revA;
-          const rateA = getTalentReviewStats(a).rating;
-          const rateB = getTalentReviewStats(b).rating;
-          if (rateB !== rateA) return rateB - rateA;
-          return (a.name || "").localeCompare(b.name || "");
-        });
         break;
     }
     

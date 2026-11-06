@@ -278,17 +278,6 @@ export default function Talents() {
       case "price-high":
         result.sort((a, b) => (b.price || b.pricePerHour || 0) - (a.price || a.pricePerHour || 0));
         break;
-      case "reviews":
-        result.sort((a, b) => {
-          const revA = getTalentReviewStats(a).reviewCount;
-          const revB = getTalentReviewStats(b).reviewCount;
-          if (revB !== revA) return revB - revA;
-          const rateA = getTalentReviewStats(a).rating;
-          const rateB = getTalentReviewStats(b).rating;
-          if (rateB !== rateA) return rateB - rateA;
-          return (a.name || "").localeCompare(b.name || "");
-        });
-        break;
     }
 
     return result;
@@ -374,7 +363,6 @@ export default function Talents() {
                 <SelectItem value="rating">Penilaian Tertinggi</SelectItem>
                 <SelectItem value="price-low">Harga Terendah</SelectItem>
                 <SelectItem value="price-high">Harga Tertinggi</SelectItem>
-                <SelectItem value="reviews">Ulasan Terbanyak</SelectItem>
               </SelectContent>
             </Select>
           </div>
