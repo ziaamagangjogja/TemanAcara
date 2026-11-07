@@ -304,7 +304,7 @@ export default function Talents() {
 
   return (
     <div className="min-h-screen bg-gradient-warm pt-20 md:pt-24 pb-24 md:pb-8">
-      <div className="container">
+      <div className="container max-w-[1536px] px-4 sm:px-6">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl md:text-4xl font-bold mb-2">
@@ -424,8 +424,8 @@ export default function Talents() {
           <>
             {/* 🔥 PERBAIKAN: Tampilkan skeleton loading saat pertama kali membuka halaman tanpa teks "Memuat data" */}
             {isLoading && (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {Array.from({ length: 8 }).map((_, index) => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-5">
+                {Array.from({ length: 10 }).map((_, index) => (
                   <div key={`skeleton-${index}`} className="animate-fade-up" style={{ animationDelay: `${index * 0.05}s` }}>
                     <div className="bg-white rounded-2xl border border-orange-100 shadow-sm overflow-hidden">
                       <div className="relative aspect-[4/5] bg-gray-200 animate-pulse"></div>
@@ -444,7 +444,7 @@ export default function Talents() {
             )}
             
             {!isLoading && filteredTalents.length > 0 && (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-5">
                 {filteredTalents.map((talent, index) => (
                   <div key={talent.id} className="animate-fade-up" style={{ animationDelay: `${index * 0.05}s` }}>
                     <TalentCard talent={talent} />

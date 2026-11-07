@@ -27,6 +27,18 @@ const isValidMitra = (talent: Talent): boolean => {
 
 export function MitraTalentCard({ talent }: MitraTalentCardProps) {
   const [imageError, setImageError] = useState(false);
+  const [currentImg, setCurrentImg] = useState(() => talent?.photo || "");
+
+  const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(talent?.name || "Talent")}&background=f97316&color=ffffff&size=500&bold=true`;
+  const photoToDisplay = currentImg || fallbackAvatar;
+
+  const handleImageError = () => {
+    if (currentImg !== fallbackAvatar) {
+      setCurrentImg(fallbackAvatar);
+    } else {
+      setImageError(true);
+    }
+  };
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -41,26 +53,27 @@ export function MitraTalentCard({ talent }: MitraTalentCardProps) {
     return null;
   }
 
-  // Pastikan hanya menggunakan foto utama
-  const mitraPhoto = talent.photo; // Hanya gunakan foto utama
-
   return (
     <Card hover className="overflow-hidden group">
       <div className="relative">
         {imageError ? (
-          <div className="w-full aspect-[4/5] bg-muted flex flex-col items-center justify-center">
-            <User className="w-16 h-16 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground mt-2">Foto tidak tersedia</p>
+          <div className="w-full aspect-[4/5] bg-gradient-to-br from-orange-400 to-amber-600 flex flex-col items-center justify-center text-white">
+            <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center font-bold text-2xl mb-2 backdrop-blur-sm">
+              {(talent.name || "T").charAt(0).toUpperCase()}
+            </div>
+            <p className="text-xs font-medium text-white/80">Foto tidak tersedia</p>
           </div>
         ) : (
           <img
-            src={mitraPhoto} // Gunakan variabel yang sudah didefinisikan
+            src={photoToDisplay}
             alt={`Foto ${talent.name}`}
             className="w-full aspect-[4/5] object-cover group-hover:scale-105 transition-transform duration-500"
-            onError={() => setImageError(true)}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={handleImageError}
           />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-foreground/80 via-transparent to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-foreground/80 via-transparent to-transparent pointer-events-none" />
         
         {/* 🔥 PERBAIKAN: Perbaiki logika verifikasi untuk mitra baru dan lama */}
         {(talent.isVerified || talent.verified) && (

@@ -30,9 +30,20 @@ const isValidTalent = (talent: Talent): boolean => {
   );
 };
 
-// Gunakan React.memo untuk mencegah re-render yang tidak perlu
 export const TalentCard = memo<TalentCardProps>(({ talent }) => {
   const [imageError, setImageError] = useState(false);
+  const [currentImg, setCurrentImg] = useState(() => talent?.photo || "");
+
+  const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(talent?.name || "Talent")}&background=f97316&color=ffffff&size=500&bold=true`;
+  const photoToDisplay = currentImg || fallbackAvatar;
+
+  const handleImageError = () => {
+    if (currentImg !== fallbackAvatar) {
+      setCurrentImg(fallbackAvatar);
+    } else {
+      setImageError(true);
+    }
+  };
 
   if (!talent || !isValidTalent(talent)) {
     return (
@@ -76,20 +87,23 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
     <Card hover className="overflow-hidden group">
       <div className="relative">
         {imageError ? (
-          <div className="w-full aspect-[4/5] bg-muted flex flex-col items-center justify-center">
-            <User className="w-16 h-16 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground mt-2">Foto tidak tersedia</p>
+          <div className="w-full aspect-[4/5] bg-gradient-to-br from-orange-400 to-amber-600 flex flex-col items-center justify-center text-white">
+            <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center font-bold text-2xl mb-2 backdrop-blur-sm">
+              {(talent.name || "T").charAt(0).toUpperCase()}
+            </div>
+            <p className="text-xs font-medium text-white/80">Foto tidak tersedia</p>
           </div>
         ) : (
           <img
-            src={talentPhoto}
+            src={photoToDisplay}
             alt={`Foto ${talent.name}`}
             className="w-full aspect-[4/5] object-cover group-hover:scale-105 transition-transform duration-500"
-            loading="lazy" // Optimasi gambar tetap penting
-            onError={() => setImageError(true)} // Fungsi sederhana
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={handleImageError}
           />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-foreground/80 via-transparent to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-foreground/80 via-transparent to-transparent pointer-events-none" />
         
         {(talent.isVerified || talent.verified) && (
           <div className="absolute top-3 right-3">

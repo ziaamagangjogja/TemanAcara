@@ -419,7 +419,7 @@ export default function MitraTalents() {
 
   return (
     <div className="min-h-screen bg-gradient-warm pt-20 md:pt-24 pb-24 md:pb-8">
-      <div className="container">
+      <div className="container max-w-[1536px] px-4 sm:px-6">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl md:text-4xl font-bold mb-2">
@@ -514,7 +514,7 @@ export default function MitraTalents() {
         {/* Content */}
         <div ref={talentsListRef}>
           {isLoading ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-5">
               {skeletonComponents}
             </div>
           ) : error ? (
@@ -522,7 +522,7 @@ export default function MitraTalents() {
           ) : (
             <>
               {filteredTalents.length > 0 ? (
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-5">
                   {filteredTalents.map((talent, index) => (
                     <div 
                       key={talent.id} 
