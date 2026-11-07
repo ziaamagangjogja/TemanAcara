@@ -24,8 +24,12 @@ import {
   AlertTriangle,
   AlertCircle,
   ArrowUpRight,
-  PlusCircle,
   QrCode,
+  MessageSquare,
+  ArrowRight,
+  XCircle,
+  CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -57,6 +61,98 @@ import { createTopUpRequest, getUserTopUpRequests, TopUpRequest } from "@/lib/to
 import { getUserWithdrawalRequests, WithdrawalRequest } from "@/lib/withdrawalStore";
 
 const TOP_UP_OPTIONS = [50000, 100000, 200000, 500000, 1000000];
+
+function parseNotificationDetails(notif: any) {
+  const title = String(notif.title || '');
+  const titleLower = title.toLowerCase();
+  const message = String(notif.message || '');
+  const messageLower = message.toLowerCase();
+
+  const isTopUp = titleLower.includes('top-up') || titleLower.includes('isi saldo') || messageLower.includes('isi saldo');
+  const isTopUpRejected = isTopUp && (titleLower.includes('ditolak') || messageLower.includes('ditolak'));
+  const isTopUpApproval = isTopUp && (titleLower.includes('berhasil') || titleLower.includes('disetujui'));
+  const isTopUpRequest = isTopUp && !isTopUpRejected && !isTopUpApproval;
+
+  const isBookingRejected = !isTopUp && (
+    titleLower.includes('ditolak') || 
+    messageLower.includes('menolak pesanan') || 
+    messageLower.includes('pesanan ditolak')
+  );
+
+  const isBookingApproved = !isTopUp && !isBookingRejected && (
+    titleLower.includes('disetujui') || 
+    messageLower.includes('telah disetujui')
+  );
+
+  const isPaymentVerification = !isTopUp && !isBookingRejected && !isBookingApproved && (
+    titleLower.includes('pembayaran') || 
+    messageLower.includes('sedang diverifikasi') || 
+    messageLower.includes('verifikasi admin')
+  );
+
+  const isBookingCreated = !isTopUp && !isBookingRejected && !isBookingApproved && !isPaymentVerification && (
+    titleLower.includes('berhasil dibuat') || 
+    titleLower.includes('permintaan pemesanan')
+  );
+
+  let rejectionReason = "";
+  let refundInfo = "";
+
+  if (isBookingRejected) {
+    const reasonMatch = message.match(/Alasan:\s*([^.]+)/i);
+    if (reasonMatch) {
+      rejectionReason = reasonMatch[1].trim();
+    }
+    
+    if (messageLower.includes('menunggu admin')) {
+      refundInfo = "Pengembalian dana transfer sedang menunggu proses verifikasi dan transfer dari admin.";
+    } else if (messageLower.includes('saldo sudah dikembalikan') || messageLower.includes('dikembalikan ke saldo')) {
+      refundInfo = "Dana saldo telah otomatis dikembalikan ke dompet akun RentMate kamu.";
+    } else if (messageLower.includes('dana akan dikembalikan')) {
+      refundInfo = "Dana akan dikembalikan sesuai metode pembayaran asal.";
+    } else if (messageLower.includes('selesai') || messageLower.includes('telah dikembalikan')) {
+      refundInfo = "Dana telah berhasil dikembalikan (refund selesai).";
+    }
+  }
+
+  let categoryLabel = "Pemberitahuan";
+  let variantType: "rejected" | "approved" | "payment" | "created" | "info" = "info";
+
+  if (isBookingRejected) {
+    categoryLabel = "Pesanan Ditolak";
+    variantType = "rejected";
+  } else if (isBookingApproved) {
+    categoryLabel = "Pesanan Disetujui";
+    variantType = "approved";
+  } else if (isPaymentVerification) {
+    categoryLabel = "Verifikasi Pembayaran";
+    variantType = "payment";
+  } else if (isBookingCreated) {
+    categoryLabel = "Pesanan Dibuat";
+    variantType = "created";
+  } else if (isTopUpApproval) {
+    categoryLabel = "Isi Saldo Berhasil";
+    variantType = "approved";
+  } else if (isTopUpRejected) {
+    categoryLabel = "Isi Saldo Ditolak";
+    variantType = "rejected";
+  } else if (isTopUpRequest) {
+    categoryLabel = "Permintaan Saldo";
+    variantType = "payment";
+  }
+
+  return {
+    isBookingRejected,
+    isBookingApproved,
+    isPaymentVerification,
+    isBookingCreated,
+    isTopUp,
+    rejectionReason,
+    refundInfo,
+    categoryLabel,
+    variantType,
+  };
+}
 
 
 export default function Profile() {
@@ -90,6 +186,7 @@ export default function Profile() {
   const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
   const [isMarkingAllNotificationsRead, setIsMarkingAllNotificationsRead] = useState(false);
+  const [notificationCategoryFilter, setNotificationCategoryFilter] = useState<"all" | "unread" | "booking" | "payment">("all");
 
   const [bookings, setBookings] = useState<any[]>([]);
   const [isLoadingBookings, setIsLoadingBookings] = useState(true);
@@ -1086,70 +1183,349 @@ export default function Profile() {
 
           {/* Notifications Tab */}
           <TabsContent value="notifications" className="space-y-4">
-             <div className="flex justify-end">
-               <Button
-                 variant="ghost"
-                 size="sm"
-                 onClick={() => void handleMarkAllNotificationsRead()}
-                 disabled={isMarkingAllNotificationsRead || !notifications.some(notification => !notification.read)}
-               >
-                 <CheckCircle className="mr-2 h-4 w-4" />
-                 Tandai semua dibaca
-               </Button>
-             </div>
-             {notifications.length > 0 ? (
-                notifications.map((notif: any) => {
-                  const title = String(notif.title || '').toLowerCase();
-                  const message = String(notif.message || '').toLowerCase();
-                  const isTopUp = title.includes('top-up') || title.includes('isi saldo') || message.includes('isi saldo');
-                  const isTopUpRequest = isTopUp && (title.includes('terkirim') || title.includes('permintaan'));
-                  const isTopUpApproval = isTopUp && (title.includes('berhasil') || title.includes('disetujui'));
-                  const isTopUpRejected = isTopUp && (title.includes('ditolak') || message.includes('ditolak'));
-                  const isBooking = notif.type === 'booking' || title.includes('pesanan') || title.includes('pemesanan');
-                  const isBookingRejected = isBooking && (title.includes('ditolak') || message.includes('ditolak'));
-                  const isBookingApproved = isBooking && (title.includes('disetujui') || title.includes('berhasil'));
-                  const notificationLabel = isTopUpRejected ? 'Top-up ditolak' : isTopUpRequest ? 'Permintaan top-up' : isTopUpApproval ? 'Top-up disetujui' : isBookingRejected ? 'Booking ditolak' : isBookingApproved ? 'Booking disetujui' : isBooking ? 'Booking / pemesanan' : 'Pemberitahuan';
-                  const notificationStyle = isTopUpRejected || isBookingRejected
-                    ? 'bg-red-100 text-red-600'
-                    : isTopUpRequest
-                      ? 'bg-amber-100 text-amber-700'
-                      : isTopUpApproval || isBookingApproved
-                        ? 'bg-green-100 text-green-600'
-                        : isBooking
-                          ? 'bg-blue-100 text-blue-600'
-                          : 'bg-orange-100 text-orange-600';
+            {/* Filter Chips & Mark All Read */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={notificationCategoryFilter === "all" ? "default" : "outline"}
+                  className="h-8 text-xs rounded-full"
+                  onClick={() => setNotificationCategoryFilter("all")}
+                >
+                  Semua ({notifications.length})
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={notificationCategoryFilter === "unread" ? "default" : "outline"}
+                  className="h-8 text-xs rounded-full"
+                  onClick={() => setNotificationCategoryFilter("unread")}
+                >
+                  Belum Dibaca ({notifications.filter(n => !n.read).length})
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={notificationCategoryFilter === "booking" ? "default" : "outline"}
+                  className="h-8 text-xs rounded-full"
+                  onClick={() => setNotificationCategoryFilter("booking")}
+                >
+                  Pesanan
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={notificationCategoryFilter === "payment" ? "default" : "outline"}
+                  className="h-8 text-xs rounded-full"
+                  onClick={() => setNotificationCategoryFilter("payment")}
+                >
+                  Keuangan & Saldo
+                </Button>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs text-muted-foreground hover:text-foreground self-end sm:self-auto"
+                onClick={() => void handleMarkAllNotificationsRead()}
+                disabled={isMarkingAllNotificationsRead || !notifications.some(notification => !notification.read)}
+              >
+                <CheckCircle className="mr-1.5 h-3.5 w-3.5 text-primary" />
+                Tandai semua dibaca
+              </Button>
+            </div>
+
+            {/* Notification List */}
+            {(() => {
+              const filteredList = notifications.filter((notif: any) => {
+                if (notificationCategoryFilter === "unread") return !notif.read;
+                const details = parseNotificationDetails(notif);
+                if (notificationCategoryFilter === "booking") {
+                  return details.isBookingRejected || details.isBookingApproved || details.isBookingCreated;
+                }
+                if (notificationCategoryFilter === "payment") {
+                  return details.isPaymentVerification || details.isTopUp;
+                }
+                return true;
+              });
+
+              if (filteredList.length === 0) {
+                return (
+                  <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-orange-200">
+                    <div className="w-12 h-12 rounded-full bg-orange-100 text-primary flex items-center justify-center mx-auto mb-3">
+                      <Bell className="w-6 h-6" />
+                    </div>
+                    <h3 className="font-semibold text-gray-800">Tidak ada notifikasi</h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {notificationCategoryFilter !== "all" 
+                        ? "Tidak ada notifikasi untuk filter yang dipilih." 
+                        : "Semua pembaruan pesanan dan saldo akan muncul di sini."}
+                    </p>
+                  </div>
+                );
+              }
+
+              return filteredList.map((notif: any) => {
+                const details = parseNotificationDetails(notif);
+
+                // ==========================================
+                // 1. KARTU KHUSUS STATUS PENOLAKAN (REJECTION)
+                // ==========================================
+                if (details.variantType === "rejected") {
                   return (
-                  <Card key={notif.id} className={`p-4 ${!notif.read ? 'bg-accent/10 border-l-4 border-l-primary' : ''}`}>
-                    <button
-                      type="button"
-                      onClick={() => void handleNotificationClick(notif)}
-                      className="flex w-full items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    <Card
+                      key={notif.id}
+                      className={`overflow-hidden transition-all duration-300 rounded-2xl border ${
+                        !notif.read
+                          ? "bg-gradient-to-br from-rose-50/80 via-white to-rose-50/30 border-rose-300 shadow-sm shadow-rose-100 ring-1 ring-rose-200/60"
+                          : "bg-white hover:bg-rose-50/20 border-rose-200/70 shadow-sm"
+                      }`}
                     >
-                       <div className={`p-2 rounded-full ${notificationStyle}`}>
-                          {isTopUpRejected || isBookingRejected ? <AlertTriangle className="w-5 h-5" /> : isTopUpRequest ? <Clock className="w-5 h-5" /> : isTopUpApproval || isBookingApproved ? <CheckCircle className="w-5 h-5" /> : isTopUp ? <Wallet className="w-5 h-5" /> : isBooking ? <Calendar className="w-5 h-5" /> : <Bell className="w-5 h-5" />}
-                       </div>
-                       <div className="flex-1">
-                          <div className="flex justify-between items-start gap-3">
-                             <div>
-                               <Badge variant="outline" className={`mb-1 text-[10px] ${isTopUpRejected || isBookingRejected ? 'border-red-300 text-red-700' : isTopUpRequest ? 'border-amber-300 text-amber-700' : isTopUpApproval || isBookingApproved ? 'border-green-300 text-green-700' : isBooking ? 'border-blue-300 text-blue-700' : ''}`}>{notificationLabel}</Badge>
-                               <h4 className="font-semibold text-sm">{notif.title}</h4>
-                             </div>
-                             <span className="text-xs text-muted-foreground whitespace-nowrap">{notif.time}</span>
+                      <div className="p-5">
+                        {/* Header */}
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-11 h-11 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 ring-4 ring-rose-50 shadow-xs">
+                              <AlertTriangle className="w-5 h-5 text-rose-600" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <Badge className="bg-rose-100 hover:bg-rose-100 text-rose-700 border-rose-200 font-semibold px-2.5 py-0.5 text-xs">
+                                  {details.categoryLabel}
+                                </Badge>
+                                {!notif.read && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
+                                    Baru
+                                  </span>
+                                )}
+                              </div>
+                              <h4 className="font-bold text-base text-gray-900 mt-1">{notif.title}</h4>
+                            </div>
                           </div>
-                          <p className="text-sm text-muted-foreground mt-1">{notif.message}</p>
-                          <Badge variant="secondary" className="mt-2 text-xs">
-                            {notif.read ? "Sudah dibaca" : "Belum dibaca"}
-                          </Badge>
-                       </div>
-                    </button>
-                  </Card>
+                          <span className="text-xs text-muted-foreground whitespace-nowrap bg-muted/60 px-2.5 py-1 rounded-md">
+                            {notif.time}
+                          </span>
+                        </div>
+
+                        {/* BOX 1: Alasan Penolakan dari Mitra */}
+                        {details.rejectionReason && (
+                          <div className="rounded-xl border border-rose-200/90 bg-white/95 p-3.5 mb-2.5 shadow-xs">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 mb-1.5">
+                              <MessageSquare className="w-3.5 h-3.5 text-rose-500" />
+                              Alasan dari Mitra:
+                            </div>
+                            <div className="pl-3.5 border-l-2 border-rose-400 py-0.5">
+                              <p className="text-sm font-semibold text-gray-800 italic">
+                                "{details.rejectionReason}"
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* BOX 2: Status Pengembalian Dana (Refund) */}
+                        {details.refundInfo && (
+                          <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 mb-4">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 mb-1">
+                              <Wallet className="w-3.5 h-3.5 text-amber-600" />
+                              Status Pengembalian Dana:
+                            </div>
+                            <div className="pl-3.5 border-l-2 border-amber-400 py-0.5">
+                              <p className="text-sm text-amber-900 font-medium">
+                                {details.refundInfo}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Pesan default jika bukan format alasan */}
+                        {!details.rejectionReason && !details.refundInfo && (
+                          <p className="text-sm text-gray-700 mb-4">{notif.message}</p>
+                        )}
+
+                        {/* Tombol Aksi Cepat */}
+                        <div className="flex items-center justify-between pt-3 border-t border-rose-100 flex-wrap gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Link to="/talents">
+                              <Button size="sm" className="bg-orange-500 hover:bg-orange-600 text-white gap-1.5 shadow-sm text-xs h-8">
+                                <Sparkles className="w-3.5 h-3.5" />
+                                Cari Teman Lain
+                              </Button>
+                            </Link>
+                            <Link to="/bookings">
+                              <Button size="sm" variant="outline" className="border-rose-200 text-gray-700 hover:bg-rose-50 gap-1.5 text-xs h-8">
+                                <Calendar className="w-3.5 h-3.5 text-rose-500" />
+                                Cek Pesanan Saya
+                              </Button>
+                            </Link>
+                          </div>
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-xs text-muted-foreground hover:text-foreground h-8 px-2"
+                            onClick={() => void handleNotificationClick(notif)}
+                          >
+                            {notif.read ? "Sudah dibaca" : "Tandai dibaca"}
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
                   );
-                })
-             ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                   Tidak ada notifikasi
-                </div>
-             )}
+                }
+
+                // ==========================================
+                // 2. KARTU PESANAN DISETUJUI (APPROVED)
+                // ==========================================
+                if (details.variantType === "approved") {
+                  return (
+                    <Card
+                      key={notif.id}
+                      className={`overflow-hidden transition-all duration-300 rounded-2xl border ${
+                        !notif.read
+                          ? "bg-gradient-to-br from-emerald-50/80 via-white to-emerald-50/30 border-emerald-300 shadow-sm ring-1 ring-emerald-200/60"
+                          : "bg-white hover:bg-emerald-50/20 border-emerald-200/70 shadow-sm"
+                      }`}
+                    >
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 ring-4 ring-emerald-50 shadow-xs">
+                              <CheckCircle className="w-5 h-5 text-emerald-600" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <Badge className="bg-emerald-100 hover:bg-emerald-100 text-emerald-700 border-emerald-200 font-semibold px-2.5 py-0.5 text-xs">
+                                  {details.categoryLabel}
+                                </Badge>
+                                {!notif.read && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
+                                    Baru
+                                  </span>
+                                )}
+                              </div>
+                              <h4 className="font-bold text-base text-gray-900 mt-1">{notif.title}</h4>
+                            </div>
+                          </div>
+                          <span className="text-xs text-muted-foreground whitespace-nowrap bg-muted/60 px-2.5 py-1 rounded-md">
+                            {notif.time}
+                          </span>
+                        </div>
+
+                        <p className="text-sm text-gray-700 mb-4">{notif.message}</p>
+
+                        <div className="flex items-center justify-between pt-3 border-t border-emerald-100 flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <Link to="/chat">
+                              <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shadow-sm text-xs h-8">
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                Buka Percakapan
+                              </Button>
+                            </Link>
+                            <Link to="/bookings">
+                              <Button size="sm" variant="outline" className="border-emerald-200 text-gray-700 hover:bg-emerald-50 gap-1.5 text-xs h-8">
+                                <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                                Detail Pesanan
+                              </Button>
+                            </Link>
+                          </div>
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-xs text-muted-foreground hover:text-foreground h-8 px-2"
+                            onClick={() => void handleNotificationClick(notif)}
+                          >
+                            {notif.read ? "Sudah dibaca" : "Tandai dibaca"}
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                }
+
+                // ==========================================
+                // 3. KARTU LAINNYA (PEMBAYARAN, PESANAN BARU, INFO)
+                // ==========================================
+                const iconColor = details.variantType === "payment"
+                  ? "bg-amber-100 text-amber-600 ring-amber-50"
+                  : details.variantType === "created"
+                  ? "bg-blue-100 text-blue-600 ring-blue-50"
+                  : "bg-orange-100 text-orange-600 ring-orange-50";
+
+                const badgeColor = details.variantType === "payment"
+                  ? "bg-amber-100 text-amber-800 border-amber-200"
+                  : details.variantType === "created"
+                  ? "bg-blue-100 text-blue-800 border-blue-200"
+                  : "bg-orange-100 text-orange-800 border-orange-200";
+
+                return (
+                  <Card
+                    key={notif.id}
+                    className={`overflow-hidden transition-all duration-300 rounded-2xl border ${
+                      !notif.read
+                        ? "bg-gradient-to-br from-orange-50/40 via-white to-white border-orange-300 shadow-sm ring-1 ring-orange-200/50"
+                        : "bg-white hover:bg-muted/20 border-orange-100 shadow-sm"
+                    }`}
+                  >
+                    <div className="p-5">
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ring-4 shadow-xs ${iconColor}`}>
+                            {details.variantType === "payment" ? (
+                              <Clock className="w-5 h-5" />
+                            ) : details.variantType === "created" ? (
+                              <Calendar className="w-5 h-5" />
+                            ) : (
+                              <Bell className="w-5 h-5" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <Badge className={`font-semibold px-2.5 py-0.5 text-xs hover:bg-transparent ${badgeColor}`}>
+                                {details.categoryLabel}
+                              </Badge>
+                              {!notif.read && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
+                                  Baru
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-bold text-base text-gray-900 mt-1">{notif.title}</h4>
+                          </div>
+                        </div>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap bg-muted/60 px-2.5 py-1 rounded-md">
+                          {notif.time}
+                        </span>
+                      </div>
+
+                      <p className="text-sm text-gray-700 mb-4">{notif.message}</p>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-gray-100 flex-wrap gap-2">
+                        <Link to="/bookings">
+                          <Button size="sm" variant="outline" className="border-orange-200 hover:bg-orange-50 text-gray-700 gap-1.5 text-xs h-8">
+                            <Calendar className="w-3.5 h-3.5 text-primary" />
+                            Lihat di Pesanan Saya
+                          </Button>
+                        </Link>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs text-muted-foreground hover:text-foreground h-8 px-2"
+                          onClick={() => void handleNotificationClick(notif)}
+                        >
+                          {notif.read ? "Sudah dibaca" : "Tandai dibaca"}
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              });
+            })()}
           </TabsContent>
 
           {/* Settings Tab */}
@@ -1631,6 +2007,96 @@ export default function Profile() {
           bookingDate={complaintModal.bookingDate}
           bookingPurpose={complaintModal.bookingPurpose}
         />
+        {/* Modal Detail Notifikasi */}
+        <Dialog open={isNotificationDetailsOpen} onOpenChange={setIsNotificationDetailsOpen}>
+          <DialogContent className="sm:max-w-[480px] p-6 rounded-2xl">
+            {selectedNotification && (() => {
+              const details = parseNotificationDetails(selectedNotification);
+              return (
+                <div className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs ${
+                      details.variantType === "rejected"
+                        ? "bg-rose-100 text-rose-600"
+                        : details.variantType === "approved"
+                        ? "bg-emerald-100 text-emerald-600"
+                        : "bg-orange-100 text-orange-600"
+                    }`}>
+                      {details.variantType === "rejected" ? (
+                        <AlertTriangle className="w-6 h-6" />
+                      ) : details.variantType === "approved" ? (
+                        <CheckCircle className="w-6 h-6" />
+                      ) : (
+                        <Bell className="w-6 h-6" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs">
+                          {details.categoryLabel}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">{selectedNotification.time}</span>
+                      </div>
+                      <h3 className="text-lg font-bold text-gray-900 mt-1">{selectedNotification.title}</h3>
+                    </div>
+                  </div>
+
+                  {details.rejectionReason && (
+                    <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 mb-1.5">
+                        <MessageSquare className="w-4 h-4 text-rose-500" />
+                        Alasan dari Mitra:
+                      </div>
+                      <p className="text-sm font-semibold text-gray-800 italic pl-3 border-l-2 border-rose-400">
+                        "{details.rejectionReason}"
+                      </p>
+                    </div>
+                  )}
+
+                  {details.refundInfo && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 mb-1">
+                        <Wallet className="w-4 h-4 text-amber-600" />
+                        Status Pengembalian Dana:
+                      </div>
+                      <p className="text-sm text-amber-900 font-medium pl-3 border-l-2 border-amber-400">
+                        {details.refundInfo}
+                      </p>
+                    </div>
+                  )}
+
+                  {!details.rejectionReason && !details.refundInfo && (
+                    <div className="bg-muted/40 rounded-xl p-4 text-sm text-gray-700">
+                      {selectedNotification.message}
+                    </div>
+                  )}
+
+                  <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
+                    {details.variantType === "rejected" && (
+                      <Link to="/talents" className="w-full sm:w-auto" onClick={() => setIsNotificationDetailsOpen(false)}>
+                        <Button className="w-full bg-orange-500 hover:bg-orange-600 text-white gap-1.5">
+                          <Sparkles className="w-4 h-4" />
+                          Cari Teman Lain
+                        </Button>
+                      </Link>
+                    )}
+                    {details.variantType === "approved" && (
+                      <Link to="/chat" className="w-full sm:w-auto" onClick={() => setIsNotificationDetailsOpen(false)}>
+                        <Button className="w-full bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5">
+                          <MessageSquare className="w-4 h-4" />
+                          Buka Percakapan
+                        </Button>
+                      </Link>
+                    )}
+                    <Button variant="outline" className="w-full sm:w-auto" onClick={() => setIsNotificationDetailsOpen(false)}>
+                      Tutup
+                    </Button>
+                  </DialogFooter>
+                </div>
+              );
+            })()}
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
