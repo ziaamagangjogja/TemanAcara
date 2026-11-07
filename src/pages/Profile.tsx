@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   AlertCircle,
   ArrowUpRight,
+  PlusCircle,
   QrCode,
   MessageSquare,
   ArrowRight,
@@ -2010,6 +2011,9 @@ export default function Profile() {
         {/* Modal Detail Notifikasi */}
         <Dialog open={isNotificationDetailsOpen} onOpenChange={setIsNotificationDetailsOpen}>
           <DialogContent className="sm:max-w-[480px] p-6 rounded-2xl">
+            <DialogHeader>
+              <DialogTitle className="sr-only">Detail Notifikasi</DialogTitle>
+            </DialogHeader>
             {selectedNotification && (() => {
               const details = parseNotificationDetails(selectedNotification);
               return (
