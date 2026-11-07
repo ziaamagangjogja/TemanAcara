@@ -105,6 +105,8 @@ type VerificationItem = {
   name: string;
   email: string;
   photo: string;
+  rawPhoto?: string | null;
+  hasUploadedPhoto?: boolean;
   date: string;
   status: "pending" | "approved" | "rejected";
   verificationDocuments: {
@@ -605,31 +607,41 @@ export default function Admin() {
 
       const data = await response.json();
 
-      const formattedVerifications: VerificationItem[] = data.map((mitra: any) => ({
-        id: mitra.user_id,
-        name: mitra.full_name,
-        email: mitra.email,
-        photo: getImageUrl(mitra.photo, `https://ui-avatars.com/api/?name=${encodeURIComponent(mitra.full_name)}&background=random&color=fff`),
-        date: new Date(mitra.created_at).toLocaleDateString("id-ID"),
-        status: mitra.status,
-        verificationDocuments: { ktp: mitra.ktp, kk: null, selfie: null, sim: null },
-        verificationDeadline: new Date(new Date(mitra.created_at).getTime() + 24 * 60 * 60 * 1000).toISOString(),
-        verificationEmailSent: false,
-        isLegacyTalent: false,
-        phone: mitra.phone,
-        address: mitra.address,
-        category: mitra.category,
-        description: mitra.description,
-        price: mitra.price,
-        age: mitra.age,
-        experience_level: mitra.experience_level || "acara",
-        price_expectation: mitra.price_expectation || "Rp 250.000 - Rp 350.000",
-        social_media: mitra.social_media || "",
-        portfolio_file: mitra.portfolio_file || null,
-        appeal_file: mitra.appeal_file || null,
-        rejection_reason: mitra.rejection_reason || null,
-        pricing_tier: mitra.pricing_tier || "tier2",
-      }));
+      const formattedVerifications: VerificationItem[] = data.map((mitra: any) => {
+        const hasRealPhoto = Boolean(
+          mitra.photo &&
+          typeof mitra.photo === "string" &&
+          mitra.photo.trim() !== "" &&
+          !mitra.photo.includes("ui-avatars.com")
+        );
+        return {
+          id: mitra.user_id,
+          name: mitra.full_name,
+          email: mitra.email,
+          photo: getImageUrl(mitra.photo, `https://ui-avatars.com/api/?name=${encodeURIComponent(mitra.full_name)}&background=random&color=fff`),
+          rawPhoto: mitra.photo || null,
+          hasUploadedPhoto: hasRealPhoto,
+          date: new Date(mitra.created_at).toLocaleDateString("id-ID"),
+          status: mitra.status,
+          verificationDocuments: { ktp: mitra.ktp, kk: null, selfie: null, sim: null },
+          verificationDeadline: new Date(new Date(mitra.created_at).getTime() + 24 * 60 * 60 * 1000).toISOString(),
+          verificationEmailSent: false,
+          isLegacyTalent: false,
+          phone: mitra.phone,
+          address: mitra.address,
+          category: mitra.category,
+          description: mitra.description,
+          price: mitra.price,
+          age: mitra.age,
+          experience_level: mitra.experience_level || "acara",
+          price_expectation: mitra.price_expectation || "Rp 250.000 - Rp 350.000",
+          social_media: mitra.social_media || "",
+          portfolio_file: mitra.portfolio_file || null,
+          appeal_file: mitra.appeal_file || null,
+          rejection_reason: mitra.rejection_reason || null,
+          pricing_tier: mitra.pricing_tier || "tier2",
+        };
+      });
 
       // PERFORMA: Gunakan startTransition untuk pembaruan state yang tidak mendesak
       startTransition(() => {
@@ -641,13 +653,22 @@ export default function Admin() {
         const appealsRes = await fetch('/api/admin/appeals');
         if (appealsRes.ok) {
           const appealsData = await appealsRes.json();
-          const formattedAppeals: VerificationItem[] = appealsData.map((mitra: any) => ({
-            id: mitra.user_id,
-            name: mitra.full_name,
-            email: mitra.email,
-            photo: getImageUrl(mitra.photo, `https://ui-avatars.com/api/?name=${encodeURIComponent(mitra.full_name)}&background=random&color=fff`),
-            date: new Date(mitra.created_at).toLocaleDateString("id-ID"),
-            status: mitra.status,
+          const formattedAppeals: VerificationItem[] = appealsData.map((mitra: any) => {
+            const hasRealPhoto = Boolean(
+              mitra.photo &&
+              typeof mitra.photo === "string" &&
+              mitra.photo.trim() !== "" &&
+              !mitra.photo.includes("ui-avatars.com")
+            );
+            return {
+              id: mitra.user_id,
+              name: mitra.full_name,
+              email: mitra.email,
+              photo: getImageUrl(mitra.photo, `https://ui-avatars.com/api/?name=${encodeURIComponent(mitra.full_name)}&background=random&color=fff`),
+              rawPhoto: mitra.photo || null,
+              hasUploadedPhoto: hasRealPhoto,
+              date: new Date(mitra.created_at).toLocaleDateString("id-ID"),
+              status: mitra.status,
             verificationDocuments: { ktp: mitra.ktp, kk: null, selfie: null, sim: null },
             phone: mitra.phone,
             address: mitra.address,
@@ -664,7 +685,8 @@ export default function Admin() {
             pricing_tier: mitra.pricing_tier || "tier2",
             appeal_note: mitra.appeal_note,
             admin_price_note: mitra.admin_price_note,
-          }));
+          };
+        });
           startTransition(() => {
             setAppeals(formattedAppeals);
           });
@@ -1659,7 +1681,7 @@ export default function Admin() {
 
   const handleOpenRejectDialog = (talent: VerificationItem) => {
     setTalentToReject(talent);
-    setRejectionReason("KTP buram / tidak terbaca dengan jelas");
+    setRejectionReason(!talent.hasUploadedPhoto ? "Foto profil belum diunggah / buram / tidak memenuhi syarat" : "KTP buram / tidak terbaca dengan jelas");
     setCustomRejectionReason("");
     setShowRejectDialog(true);
   };
@@ -2756,10 +2778,24 @@ export default function Admin() {
                       <Card key={user.id} className="overflow-hidden">
                         <div className="p-4">
                           <div className="flex items-start gap-4">
-                            <img src={user.photo} alt={user.name} className="w-16 h-16 rounded-full object-cover" />
-                            <div className="flex-1">
-                              <h3 className="font-bold">{user.name}</h3>
-                              <p className="text-sm text-muted-foreground">{user.email}</p>
+                            {user.hasUploadedPhoto ? (
+                              <img src={user.photo} alt={user.name} className="w-16 h-16 rounded-full object-cover border" />
+                            ) : (
+                              <div className="w-16 h-16 rounded-full bg-red-50 border-2 border-dashed border-red-300 text-red-500 flex flex-col items-center justify-center shrink-0 shadow-inner" title="Foto profil belum diunggah">
+                                <UserRound className="w-6 h-6 text-red-500" />
+                                <span className="text-[9px] font-bold text-red-600 mt-0.5">No Foto</span>
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="font-bold">{user.name}</h3>
+                                {!user.hasUploadedPhoto && (
+                                  <Badge variant="destructive" className="text-[9px] px-1.5 py-0 h-4">
+                                    Tanpa Foto Profil
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground truncate">{user.email}</p>
                               <p className="text-xs text-muted-foreground mt-1">Dikirim: {user.date}</p>
                               <div className="mt-3">
                                 <Badge variant="warning" className="gap-1">
@@ -2885,10 +2921,24 @@ export default function Admin() {
                       <Card key={user.id} className="overflow-hidden border-destructive/40 bg-red-50/10">
                         <div className="p-4">
                           <div className="flex items-start gap-4">
-                            <img src={user.photo} alt={user.name} className="w-16 h-16 rounded-full object-cover border-2 border-red-200" />
-                            <div className="flex-1">
-                              <h3 className="font-bold">{user.name}</h3>
-                              <p className="text-sm text-muted-foreground">{user.email}</p>
+                            {user.hasUploadedPhoto ? (
+                              <img src={user.photo} alt={user.name} className="w-16 h-16 rounded-full object-cover border-2 border-red-200" />
+                            ) : (
+                              <div className="w-16 h-16 rounded-full bg-red-50 border-2 border-dashed border-red-300 text-red-500 flex flex-col items-center justify-center shrink-0 shadow-inner" title="Foto profil belum diunggah">
+                                <UserRound className="w-6 h-6 text-red-500" />
+                                <span className="text-[9px] font-bold text-red-600 mt-0.5">No Foto</span>
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="font-bold">{user.name}</h3>
+                                {!user.hasUploadedPhoto && (
+                                  <Badge variant="destructive" className="text-[9px] px-1.5 py-0 h-4">
+                                    Tanpa Foto Profil
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground truncate">{user.email}</p>
                               <p className="text-xs text-muted-foreground mt-1">Dikirim: {user.date}</p>
                               <div className="mt-3">
                                 <Badge variant="destructive" className="gap-1">
@@ -5082,29 +5132,50 @@ export default function Admin() {
                   <div className="w-full max-w-[240px] space-y-2.5">
                     <div className="flex items-center justify-between">
                       <Label className="text-xs font-semibold text-muted-foreground">Foto Profil</Label>
-                      <span className="text-[11px] text-orange-600 font-medium">Bisa diklik ↗</span>
+                      {selectedVerification.hasUploadedPhoto ? (
+                        <span className="text-[11px] text-orange-600 font-medium">Bisa diklik ↗</span>
+                      ) : (
+                        <Badge variant="destructive" className="text-[10px] px-1.5 py-0.5 font-semibold">
+                          Belum Diunggah
+                        </Badge>
+                      )}
                     </div>
 
-                    {/* Foto Card dengan Zoom Trigger */}
-                    <div
-                      onClick={() => setPreviewPhotoModal({
-                        isOpen: true,
-                        url: selectedVerification.photo,
-                        title: selectedVerification.name,
-                      })}
-                      className="w-full aspect-[3/4] rounded-2xl overflow-hidden border-2 border-orange-200/80 bg-slate-100 shadow-md relative group cursor-pointer"
-                      title="Klik untuk melihat foto asli ukuran penuh"
-                    >
-                      <img
-                        src={selectedVerification.photo}
-                        alt={selectedVerification.name}
-                        className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
-                      />
-                      <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white gap-1.5 p-3 text-center">
-                        <ZoomIn className="w-6 h-6 text-white" />
-                        <span className="text-xs font-semibold">Klik untuk Lihat Foto Asli (Penuh)</span>
+                    {/* Foto Card dengan Zoom Trigger ATAU Placeholder Belum Ada Foto */}
+                    {selectedVerification.hasUploadedPhoto ? (
+                      <div
+                        onClick={() => setPreviewPhotoModal({
+                          isOpen: true,
+                          url: selectedVerification.photo,
+                          title: selectedVerification.name,
+                        })}
+                        className="w-full aspect-[3/4] rounded-2xl overflow-hidden border-2 border-orange-200/80 bg-slate-100 shadow-md relative group cursor-pointer"
+                        title="Klik untuk melihat foto asli ukuran penuh"
+                      >
+                        <img
+                          src={selectedVerification.photo}
+                          alt={selectedVerification.name}
+                          className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
+                        />
+                        <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white gap-1.5 p-3 text-center">
+                          <ZoomIn className="w-6 h-6 text-white" />
+                          <span className="text-xs font-semibold">Klik untuk Lihat Foto Asli (Penuh)</span>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="w-full aspect-[3/4] rounded-2xl border-2 border-dashed border-red-300 bg-red-50/60 dark:bg-red-950/20 flex flex-col items-center justify-center p-4 text-center shadow-xs">
+                        <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 flex items-center justify-center mb-3 shadow-inner">
+                          <UserRound className="w-8 h-8" />
+                        </div>
+                        <span className="text-xs font-bold text-red-600 tracking-tight">Foto Profil Belum Diunggah</span>
+                        <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed px-1">
+                          Calon mitra belum melampirkan foto profil saat proses pendaftaran.
+                        </p>
+                        <Badge variant="outline" className="mt-3 text-[10px] border-red-200 text-red-600 bg-red-50/80 font-medium">
+                          Data Kurang Lengkap
+                        </Badge>
+                      </div>
+                    )}
 
                     {/* Akses Dokumen KTP */}
                     <div className="pt-1.5">
@@ -5653,9 +5724,22 @@ export default function Admin() {
           {talentToReject && (
             <div className="space-y-4">
               <div className="p-3 rounded-lg border bg-muted/20 flex items-center gap-3">
-                <img src={talentToReject.photo} alt={talentToReject.name} className="w-10 h-10 rounded-full object-cover border shrink-0" />
+                {talentToReject.hasUploadedPhoto ? (
+                  <img src={talentToReject.photo} alt={talentToReject.name} className="w-10 h-10 rounded-full object-cover border shrink-0" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-red-100 border border-red-300 text-red-500 flex items-center justify-center shrink-0">
+                    <UserRound className="w-5 h-5" />
+                  </div>
+                )}
                 <div className="min-w-0">
-                  <p className="font-bold text-sm text-foreground truncate">{talentToReject.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm text-foreground truncate">{talentToReject.name}</p>
+                    {!talentToReject.hasUploadedPhoto && (
+                      <Badge variant="destructive" className="text-[9px] px-1.5 py-0 h-4">
+                        Tanpa Foto
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground truncate">{talentToReject.email}</p>
                 </div>
               </div>
@@ -5664,10 +5748,10 @@ export default function Admin() {
                 <Label className="text-xs font-semibold">Alasan Penolakan Standar</Label>
                 <div className="space-y-1.5 text-xs">
                   {[
+                    "Foto profil belum diunggah / buram / tidak memenuhi syarat",
                     "KTP buram / tidak terbaca dengan jelas",
                     "Data identitas (nama/alamat/umur) tidak cocok dengan dokumen KTP",
                     "Deskripsi diri atau kategori keahlian tidak sesuai panduan platform",
-                    "Foto profil tidak memenuhi standar kualitas dan etika platform",
                     "Usia belum memenuhi syarat minimal 17 tahun",
                     "Lainnya",
                   ].map((reason) => (

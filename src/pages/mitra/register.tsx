@@ -300,9 +300,7 @@ export default function MitraRegister() {
       return;
     }
 
-    const finalPhoto =
-      profileImagePreview ||
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400";
+    const finalPhoto = profileImagePreview || "";
 
     if (!formData.ktpLink) {
       toast({
