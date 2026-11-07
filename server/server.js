@@ -1010,6 +1010,21 @@ app.post('/api/mitra-bookings/:id/reject', async (req, res) => {
       ]
     );
 
+    // Kirim notifikasi ke Admin jika pesanan yang ditolak mitra sudah berbayar
+    if (booking.payment_status === 'paid') {
+      const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+      const isManualRefund = paymentStatus === 'refund_pending';
+      await connection.query(
+        `INSERT INTO notifications (id, user_id, title, message, type, is_read, created_at)
+         VALUES (?, 'admin', ?, ?, 'payment', 0, CURRENT_TIMESTAMP)`,
+        [
+          crypto.randomUUID(),
+          isManualRefund ? 'Perhatian: Ada Booking Ditolak Mitra Perlu Refund ⚠️' : 'Booking Berbayar Ditolak Mitra (Auto Refund Saldo) ℹ️',
+          `Mitra (${booking.talent_name || 'Mitra'}) menolak pesanan berbayar ${fmt(booking.total)} dari ${booking.user_name || 'Pengguna'}. Alasan: "${reason}". ${isManualRefund ? 'Pembayaran via transfer memerlukan pengembalian dana manual oleh Admin di tab Persetujuan.' : 'Dana telah otomatis dikembalikan ke saldo dompet pengguna.'}`
+        ]
+      ).catch((err) => console.warn('Gagal mencatat notifikasi admin refund:', err.message));
+    }
+
     await connection.commit();
     transactionStarted = false;
     res.status(200).json({ success: true, paymentStatus });
@@ -1782,16 +1797,27 @@ app.post('/api/withdrawal-requests', async (req, res) => {
       return res.status(400).json({ error: 'Data penarikan saldo tidak lengkap atau nominal tidak valid' });
     }
 
-    // 1. Cek saldo dompet HANYA jika role adalah user biasa dan terdaftar di database
+    // 1. Cek saldo dompet jika role adalah user biasa dan terdaftar di database
     if (role === 'user') {
       const [userRows] = await pool.query('SELECT wallet FROM users WHERE id = ?', [userId]);
       if (userRows.length > 0) {
         const currentWallet = Number(userRows[0].wallet || 0);
-        if (currentWallet < parsedAmount) {
-          return res.status(400).json({ error: 'Saldo dompet tidak mencukupi untuk penarikan ini' });
+        // Hitung total penarikan yang masih berstatus pending untuk user ini
+        const [pendingRows] = await pool.query(
+          "SELECT COALESCE(SUM(amount), 0) AS pending_total FROM withdrawal_requests WHERE user_id = ? AND status = 'pending'",
+          [userId]
+        );
+        const pendingAmount = Number(pendingRows[0]?.pending_total || 0);
+        const availableWallet = Math.max(0, currentWallet - pendingAmount);
+
+        if (availableWallet < parsedAmount) {
+          const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
+          return res.status(400).json({
+            error: `Saldo tidak mencukupi untuk penarikan ini. Saldo tersedia yang belum diajukan tarik: ${fmt(availableWallet)}.`
+          });
         }
-        // Potong saldo user di DB (langsung didebet agar tidak double-spend)
-        await pool.query('UPDATE users SET wallet = wallet - ? WHERE id = ?', [parsedAmount, userId]);
+        // Catatan: Saldo dompet TIDAK langsung dipotong di sini, melainkan tetap utuh
+        // dan baru dipotong setelah Admin memverifikasi dan menyetujui (transfer).
       }
     }
 
@@ -1819,7 +1845,7 @@ app.post('/api/withdrawal-requests', async (req, res) => {
             notifId,
             userId,
             role === 'mitra' ? 'Permintaan Pencairan Pendapatan Terkirim ⏳' : 'Permintaan Tarik Saldo Terkirim ⏳',
-            `Permintaan penarikan saldo sebesar ${fmt(parsedAmount)} ke ${bankName} (${accountNumber} a.n ${accountName}) telah dikirim dan sedang menunggu transfer dari Admin.`,
+            `Permintaan penarikan saldo sebesar ${fmt(parsedAmount)} ke ${bankName} (${accountNumber} a.n ${accountName}) telah dikirim dan sedang menunggu transfer dari Admin. Saldo dompet akan dipotong setelah Admin menyetujui transfer.`,
             'payment'
           ]
         );
@@ -1861,13 +1887,21 @@ app.post('/api/withdrawal-requests/:id/approve', async (req, res) => {
       return res.status(400).json({ error: 'Permintaan ini sudah diproses sebelumnya' });
     }
 
-    // Update status ke approved
+    // 1. Update status ke approved
     await pool.query(
       `UPDATE withdrawal_requests SET status = 'approved', admin_note = ?, proof_image = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [adminNote || 'Penarikan telah berhasil ditransfer oleh Admin', proofImageBase64 || null, req.params.id]
     );
 
-    // Kirim notifikasi sukses ke user/mitra
+    // 2. Potong saldo dompet pengguna SEKARANG setelah disetujui Admin!
+    if (withdrawal.role === 'user') {
+      await pool.query(
+        'UPDATE users SET wallet = GREATEST(0, wallet - ?) WHERE id = ?',
+        [withdrawal.amount, withdrawal.user_id]
+      );
+    }
+
+    // 3. Kirim notifikasi sukses ke user/mitra
     const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
     const notifId = crypto.randomUUID();
     try {
@@ -1876,8 +1910,8 @@ app.post('/api/withdrawal-requests/:id/approve', async (req, res) => {
         [
           notifId,
           withdrawal.user_id,
-          withdrawal.role === 'mitra' ? 'Pencairan Pendapatan Mitra Berhasil! 💸' : 'Penarikan Saldo Berhasil! 💸',
-          `Dana penarikan sebesar ${fmt(withdrawal.amount)} telah berhasil ditransfer ke rekening ${withdrawal.bank_name} (${withdrawal.account_number} a.n ${withdrawal.account_name}).`,
+          withdrawal.role === 'mitra' ? 'Pencairan Pendapatan Mitra Berhasil! 💸' : 'Penarikan Saldo Berhasil & Dipotong! 💸',
+          `Dana penarikan sebesar ${fmt(withdrawal.amount)} telah berhasil ditransfer ke rekening ${withdrawal.bank_name} (${withdrawal.account_number} a.n ${withdrawal.account_name}). Saldo dompet Anda telah resmi dipotong.`,
           'payment'
         ]
       );
@@ -1908,15 +1942,10 @@ app.post('/api/withdrawal-requests/:id/reject', async (req, res) => {
       [adminNote || 'Permintaan penarikan ditolak oleh Admin', req.params.id]
     );
 
-    // 2. Kembalikan saldo (refund) HANYA jika role === 'user'
-    if (withdrawal.role === 'user') {
-      await pool.query(
-        `UPDATE users SET wallet = wallet + ? WHERE id = ?`,
-        [withdrawal.amount, withdrawal.user_id]
-      );
-    }
+    // 2. Karena saldo TIDAK dipotong saat pengajuan (masih utuh),
+    // maka tidak perlu menambah/mengembalikan saldo lagi.
 
-    // 3. Kirim notifikasi pengembalian saldo ke user/mitra
+    // 3. Kirim notifikasi penolakan ke user/mitra
     const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n);
     const notifId = crypto.randomUUID();
     try {
@@ -1926,7 +1955,7 @@ app.post('/api/withdrawal-requests/:id/reject', async (req, res) => {
           notifId,
           withdrawal.user_id,
           withdrawal.role === 'mitra' ? 'Pencairan Pendapatan Ditolak ⚠️' : 'Penarikan Saldo Ditolak ⚠️',
-          `Permintaan penarikan sebesar ${fmt(withdrawal.amount)} ditolak. Alasan: ${adminNote || 'Informasi rekening/tujuan tidak valid'}.${withdrawal.role === 'user' ? ' Saldo telah dikembalikan ke dompet kamu.' : ' Saldo pendapatan kamu tetap utuh.'}`,
+          `Permintaan penarikan sebesar ${fmt(withdrawal.amount)} ditolak. Alasan: ${adminNote || 'Informasi rekening/tujuan tidak valid'}. Saldo dompet kamu tetap utuh dan tidak terpotong.`,
           'admin'
         ]
       );

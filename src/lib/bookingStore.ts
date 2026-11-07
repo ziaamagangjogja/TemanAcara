@@ -529,6 +529,23 @@ export async function updateBookingApproval(
     }
   }
 
+  if (isMitraRejection && typeof window !== "undefined") {
+    try {
+      const bc = new BroadcastChannel("rentmate_sync");
+      bc.postMessage({
+        type: "BOOKING_REJECTED_REFUND_PENDING",
+        bookingId: id,
+        userName: refreshedBooking.userName,
+        talentName: refreshedBooking.talentName,
+        total: refreshedBooking.total,
+        paymentMethod: refreshedBooking.paymentMethod,
+        paymentStatus: refreshedBooking.paymentStatus,
+        rejectionReason: rejectionReason,
+      });
+      bc.close();
+    } catch {}
+  }
+
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("bookingsUpdated"));
   }

@@ -1095,12 +1095,33 @@ export default function Admin() {
                 ? `Pendaftaran calon mitra baru (${event.data?.name || "Calon Mitra"}) menunggu verifikasi admin!`
                 : "Ada permohonan banding tarif baru yang masuk!",
           });
+        } else if (event.data?.type === "BOOKING_REJECTED_REFUND_PENDING") {
+          refreshBookingsFromSupabase().then(() => {
+            const pendingBookingsData = getPendingBookings();
+            setBookings(pendingBookingsData.map(b => ({ ...b, paymentStatus: (b.paymentProof ? "paid" : "pending") as PaymentStatus })));
+            setRefundPendingBookings(getRefundPendingBookings());
+          });
+          const isTransfer = event.data?.paymentMethod !== "saldo";
+          toast({
+            title: isTransfer ? "Pemesanan Ditolak: Perlu Refund Manual! ⚠️" : "Pemesanan Ditolak Mitra ℹ️",
+            description: `Mitra ${event.data?.talentName || "Mitra"} menolak pesanan dari ${event.data?.userName || "Pengguna"} (${formatCurrency(event.data?.total || 0)}). ${isTransfer ? "Harap transfer manual pengembalian dana di tab Persetujuan." : "Dana saldo telah otomatis dikembalikan ke dompet pengguna."}`,
+            variant: isTransfer ? "destructive" : "default",
+          });
         }
       };
     } catch (e) {
       console.warn("BroadcastChannel tidak didukung browser:", e);
     }
 
+    const handleBookingsUpdate = () => {
+      refreshBookingsFromSupabase().then(() => {
+        const pendingBookingsData = getPendingBookings();
+        setBookings(pendingBookingsData.map(b => ({ ...b, paymentStatus: (b.paymentProof ? "paid" : "pending") as PaymentStatus })));
+        setRefundPendingBookings(getRefundPendingBookings());
+      });
+    };
+
+    window.addEventListener("bookingsUpdated", handleBookingsUpdate);
     window.addEventListener("topupRequestsUpdated", handleFinancialUpdate);
     window.addEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
     window.addEventListener("mitraVerificationUpdated", handleVerificationUpdate);
@@ -1108,6 +1129,7 @@ export default function Admin() {
     window.addEventListener("storage", handleStorageUpdate);
 
     return () => {
+      window.removeEventListener("bookingsUpdated", handleBookingsUpdate);
       window.removeEventListener("topupRequestsUpdated", handleFinancialUpdate);
       window.removeEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
       window.removeEventListener("mitraVerificationUpdated", handleVerificationUpdate);
@@ -1964,8 +1986,8 @@ export default function Admin() {
   const pendingTopups = useMemo(() => topUpRequests.filter(r => r.status === "pending"), [topUpRequests]);
   const pendingWithdrawals = useMemo(() => withdrawalRequests.filter(r => r.status === "pending"), [withdrawalRequests]);
   const totalPendingTasks = useMemo(() => {
-    return pendingReports.length + pendingVerificationsCount + pendingTopups.length + pendingWithdrawals.length + bookings.length;
-  }, [pendingReports.length, pendingVerificationsCount, pendingTopups.length, pendingWithdrawals.length, bookings.length]);
+    return pendingReports.length + pendingVerificationsCount + pendingTopups.length + pendingWithdrawals.length + bookings.length + refundPendingBookings.length;
+  }, [pendingReports.length, pendingVerificationsCount, pendingTopups.length, pendingWithdrawals.length, bookings.length, refundPendingBookings.length]);
 
   // Filtered topup requests & metrik ringkasan untuk Tab Top-Up
   const filteredTopUpRequests = useMemo(() => {
@@ -2151,6 +2173,26 @@ export default function Admin() {
                         </p>
                         <p className="text-[11px] text-muted-foreground truncate">
                           Verifikasi pembayaran booking baru
+                        </p>
+                      </div>
+                    </button>
+                  )}
+
+                  {refundPendingBookings.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => { setActiveTab("approvals"); setIsNotifOpen(false); }}
+                      className="w-full flex items-start gap-3 p-2 rounded-xl text-left hover:bg-rose-50 transition-colors"
+                    >
+                      <div className="p-2 rounded-lg bg-rose-100 text-rose-600 shrink-0 mt-0.5">
+                        <AlertCircle className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-foreground">
+                          {refundPendingBookings.length} Refund Dana Perlu Diproses
+                        </p>
+                        <p className="text-[11px] text-muted-foreground truncate">
+                          Booking berbayar ditolak mitra, perlu refund dana
                         </p>
                       </div>
                     </button>
@@ -2351,11 +2393,11 @@ export default function Admin() {
             <TabsTrigger value="approvals" className="relative gap-1">
               <Clock className="w-4 h-4" />
               Persetujuan
-              {bookings.length > 0 && (
+              {(bookings.length + refundPendingBookings.length) > 0 && (
                 <span
                   className="absolute -top-2 -right-2 inline-flex items-center justify-center h-5 w-5 text-xs font-bold text-white bg-red-500 rounded-full"
                 >
-                  {bookings.length}
+                  {bookings.length + refundPendingBookings.length}
                 </span>
               )}
             </TabsTrigger>
