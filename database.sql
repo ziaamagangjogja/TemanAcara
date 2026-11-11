@@ -26,6 +26,11 @@ CREATE TABLE profiles (
     address VARCHAR(255),
     description TEXT,
     price DECIMAL(10,2) DEFAULT 0,
+    service_rates LONGTEXT NULL,
+    pending_service_rates LONGTEXT NULL,
+    supported_activities LONGTEXT NULL,
+    hobbies LONGTEXT NULL,
+    specialist_skills LONGTEXT NULL,
     category VARCHAR(100),
     photo LONGTEXT,
     ktp LONGTEXT,
@@ -177,4 +182,3 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
     INDEX idx_withdrawals_user (user_id),
     INDEX idx_withdrawals_status (status)
 );
-

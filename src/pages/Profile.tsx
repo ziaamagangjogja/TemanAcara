@@ -60,6 +60,7 @@ import { dicebearAvatar, initialsAvatar } from "@/lib/utils";
 import { compressImageFile } from "@/utils/imageCompressor";
 import { createTopUpRequest, getUserTopUpRequests, TopUpRequest } from "@/lib/topupStore";
 import { getUserWithdrawalRequests, WithdrawalRequest } from "@/lib/withdrawalStore";
+import { getActiveChatSessions } from "@/lib/chatStore";
 
 const TOP_UP_OPTIONS = [50000, 100000, 200000, 500000, 1000000];
 
@@ -190,11 +191,15 @@ export default function Profile() {
   const [notificationCategoryFilter, setNotificationCategoryFilter] = useState<"all" | "unread" | "booking" | "payment">("all");
 
   const [bookings, setBookings] = useState<any[]>([]);
+  const [myComplaints, setMyComplaints] = useState<any[]>([]);
+  const [myChatSessions, setMyChatSessions] = useState<any[]>([]);
+  const [selectedComplaint, setSelectedComplaint] = useState<any>(null);
+  const [showComplaintDialog, setShowComplaintDialog] = useState(false);
   const [isLoadingBookings, setIsLoadingBookings] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   
-  const [historyTypeFilter, setHistoryTypeFilter] = useState<"all" | "booking" | "saldo" | "withdrawal">("all");
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<"all" | "booking" | "saldo" | "withdrawal" | "complaint" | "chat">("all");
   const [historyTimeFilter, setHistoryTimeFilter] = useState<"newest" | "oldest">("newest");
 
 
@@ -301,6 +306,51 @@ export default function Profile() {
     void loadUserBookings();
   };
 
+  const loadUserComplaints = useCallback(async (userId: string, userEmail?: string) => {
+    try {
+      let reports: any[] = [];
+      try {
+        const res = await fetch("/api/complaints");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) reports = data;
+        }
+      } catch {
+        // Fallback network error
+      }
+
+      try {
+        const local = JSON.parse(localStorage.getItem("lovable_reports") || "[]");
+        if (Array.isArray(local)) {
+          const ids = new Set(reports.map(r => r.id));
+          local.forEach(r => {
+            if (!ids.has(r.id)) reports.push(r);
+          });
+        }
+      } catch {
+        // Fallback
+      }
+
+      const filtered = reports.filter(r =>
+        (r.userId && r.userId === userId) ||
+        (r.user_id && r.user_id === userId) ||
+        (userEmail && r.userEmail && r.userEmail.toLowerCase() === userEmail.toLowerCase())
+      );
+      setMyComplaints(filtered);
+    } catch (err) {
+      console.error("Gagal memuat komplain pengguna:", err);
+    }
+  }, []);
+
+  const loadUserChats = useCallback(() => {
+    try {
+      const sessions = getActiveChatSessions();
+      setMyChatSessions(Array.isArray(sessions) ? sessions : []);
+    } catch (err) {
+      console.error("Gagal memuat sesi chat pengguna:", err);
+    }
+  }, []);
+
   useEffect(() => {
     loadUserData();
     loadUserBookings();
@@ -330,15 +380,17 @@ export default function Profile() {
       }
     } catch {}
 
-    // Muat riwayat top-up & penarikan saldo milik user
+    // Muat riwayat top-up, penarikan saldo, komplain, & percakapan milik user
     loadUserData().then(async () => {
       const user = await import("@/lib/userStore").then(m => m.getCurrentUser());
       if (user) {
         getUserTopUpRequests(user.id).then(reqs => setMyTopUpRequests(reqs));
         getUserWithdrawalRequests(user.id).then(reqs => setMyWithdrawalRequests(reqs));
+        loadUserComplaints(user.id, user.email);
+        loadUserChats();
       }
     });
-  }, [loadUserData, loadUserBookings, refreshTrigger]);
+  }, [loadUserData, loadUserBookings, refreshTrigger, loadUserComplaints, loadUserChats]);
 
   useEffect(() => {
     const handleBookingUpdate = () => {
@@ -356,13 +408,15 @@ export default function Profile() {
     };
   }, [loadUserBookings]);
 
-  // Re-load top-up & withdrawal requests when list changes
+  // Re-load top-up, withdrawal, complaints & chat sessions when data changes
   useEffect(() => {
     const handleFinancialUpdate = async () => {
       const user = await import("@/lib/userStore").then(m => m.getCurrentUser());
       if (user) {
         getUserTopUpRequests(user.id).then(reqs => setMyTopUpRequests(reqs));
         getUserWithdrawalRequests(user.id).then(reqs => setMyWithdrawalRequests(reqs));
+        loadUserComplaints(user.id, user.email);
+        loadUserChats();
         // Reload user data to reflect wallet changes
         loadUserData();
       }
@@ -370,6 +424,9 @@ export default function Profile() {
     window.addEventListener("topupRequestsUpdated", handleFinancialUpdate);
     window.addEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
     window.addEventListener("userUpdated", handleFinancialUpdate);
+    window.addEventListener("newReport", handleFinancialUpdate);
+    window.addEventListener("chatsUpdated", handleFinancialUpdate);
+    window.addEventListener("chatSessionsUpdated", handleFinancialUpdate);
     
     // Listen for notification updates
     const handleNotificationsUpdate = () => {
@@ -382,6 +439,8 @@ export default function Profile() {
       if (
         e.key === "rentmate_topup_requests" ||
         e.key === "rentmate_withdrawal_requests" ||
+        e.key === "rentmate_complaints_updated" ||
+        e.key === "lovable_reports" ||
         e.key?.startsWith("rentmate_notifications_") ||
         e.key === "rentmate_current_username"
       ) {
@@ -395,10 +454,13 @@ export default function Profile() {
       window.removeEventListener("topupRequestsUpdated", handleFinancialUpdate);
       window.removeEventListener("withdrawalRequestsUpdated", handleFinancialUpdate);
       window.removeEventListener("userUpdated", handleFinancialUpdate);
+      window.removeEventListener("newReport", handleFinancialUpdate);
+      window.removeEventListener("chatsUpdated", handleFinancialUpdate);
+      window.removeEventListener("chatSessionsUpdated", handleFinancialUpdate);
       window.removeEventListener("notificationsUpdated", handleNotificationsUpdate);
       window.removeEventListener("storage", handleStorageEvent);
     };
-  }, [loadUserData]);
+  }, [loadUserData, loadUserComplaints, loadUserChats]);
 
 
   const handleTopUpProofUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -656,14 +718,28 @@ export default function Profile() {
       sortDate: new Date(w.createdAt).getTime()
     }));
 
-    // 4. Combine & Filter
-    let combined = [...mappedBookings, ...mappedTopUps, ...mappedWithdrawals];
+    // 4. Map komplain
+    const mappedComplaints = myComplaints.map(c => ({
+      ...c,
+      historyType: "complaint" as const,
+      sortDate: new Date(c.createdAt || c.created_at || Date.now()).getTime()
+    }));
+
+    // 5. Map chat / percakapan
+    const mappedChats = myChatSessions.map(cs => ({
+      ...cs,
+      historyType: "chat" as const,
+      sortDate: new Date(cs.lastMessageTime || Date.now()).getTime()
+    }));
+
+    // 6. Combine & Filter
+    let combined = [...mappedBookings, ...mappedTopUps, ...mappedWithdrawals, ...mappedComplaints, ...mappedChats];
 
     if (historyTypeFilter !== "all") {
       combined = combined.filter(item => item.historyType === historyTypeFilter);
     }
 
-    // 5. Sort
+    // 7. Sort
     combined.sort((a, b) => {
       if (historyTimeFilter === "newest") {
         return b.sortDate - a.sortDate;
@@ -672,7 +748,7 @@ export default function Profile() {
     });
 
     return combined;
-  }, [bookings, myTopUpRequests, myWithdrawalRequests, historyTypeFilter, historyTimeFilter]);
+  }, [bookings, myTopUpRequests, myWithdrawalRequests, myComplaints, myChatSessions, historyTypeFilter, historyTimeFilter]);
 
 
   if (isLoadingUser) {
@@ -933,14 +1009,16 @@ export default function Profile() {
               
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
                 <Select value={historyTypeFilter} onValueChange={(val: any) => setHistoryTypeFilter(val)}>
-                  <SelectTrigger className="w-[140px] h-9">
-                    <SelectValue placeholder="Semua Jenis" />
+                  <SelectTrigger className="w-[170px] h-9">
+                    <SelectValue placeholder="Semua Riwayat" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Semua Jenis</SelectItem>
+                    <SelectItem value="all">Semua Riwayat</SelectItem>
                     <SelectItem value="booking">Pemesanan</SelectItem>
-                    <SelectItem value="saldo">Isi Saldo</SelectItem>
+                    <SelectItem value="saldo">Isi Saldo (Top Up)</SelectItem>
                     <SelectItem value="withdrawal">Tarik Saldo</SelectItem>
+                    <SelectItem value="complaint">Komplain</SelectItem>
+                    <SelectItem value="chat">Percakapan</SelectItem>
                   </SelectContent>
                 </Select>
 
@@ -1020,6 +1098,90 @@ export default function Profile() {
                           <Badge variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : 'destructive'} className="mt-1">
                             {req.status === 'pending' ? 'Menunggu Transfer' : req.status === 'approved' ? 'Berhasil Ditransfer' : 'Ditolak'}
                           </Badge>
+                        </div>
+                      </Card>
+                    );
+                  } else if (item.historyType === "complaint") {
+                    const comp = item as any;
+                    const isResolved = comp.status === "resolved";
+                    const isInProgress = comp.status === "in-progress";
+                    return (
+                      <Card key={`comp-${comp.id}-${index}`} className="p-4 hover:shadow-md transition-shadow">
+                        <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                              isResolved ? "bg-emerald-100 text-emerald-600" : isInProgress ? "bg-blue-100 text-blue-600" : "bg-rose-100 text-rose-600"
+                            }`}>
+                              <AlertCircle className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-sm">Laporan Komplain: {comp.talentName || "Mitra"}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {comp.createdAt ? new Date(comp.createdAt).toLocaleString("id-ID") : "-"}
+                              </p>
+                              <p className="text-xs text-foreground/80 mt-1 line-clamp-2 bg-muted/60 p-2 rounded-md max-w-xl">
+                                {comp.description}
+                              </p>
+                              {comp.adminNotes && (
+                                <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1.5 font-medium">
+                                  Tanggapan Admin: {comp.adminNotes}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between w-full sm:w-auto gap-2 flex-shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0">
+                            <Badge variant={isResolved ? "success" : isInProgress ? "accent" : "warning"}>
+                              {isResolved ? "Selesai Ditangani" : isInProgress ? "Sedang Diproses" : "Menunggu Peninjauan"}
+                            </Badge>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs h-8 px-2.5 gap-1"
+                              onClick={() => {
+                                setSelectedComplaint(comp);
+                                setShowComplaintDialog(true);
+                              }}
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              Detail Komplain
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  } else if (item.historyType === "chat") {
+                    const cs = item as any;
+                    return (
+                      <Card key={`chat-${cs.id}-${index}`} className="p-4 hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img
+                              src={cs.talentPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(cs.talentName || "Mitra")}`}
+                              alt={cs.talentName}
+                              className="w-12 h-12 rounded-full object-cover ring-2 ring-primary/20 flex-shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <p className="font-semibold text-sm truncate">{cs.talentName}</p>
+                              <p className="text-xs text-primary font-medium truncate">{cs.purpose}</p>
+                              <p className="text-xs text-muted-foreground truncate max-w-xs mt-0.5">
+                                {cs.lastMessage || "Mulai percakapan..."}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                            <span className="text-[11px] text-muted-foreground">
+                              {cs.lastMessageTime ? new Date(cs.lastMessageTime).toLocaleDateString("id-ID", { day: "numeric", month: "short" }) : ""}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs gap-1"
+                              onClick={() => navigate(`/chat/${cs.bookingId}`)}
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                              Buka Chat
+                            </Button>
+                          </div>
                         </div>
                       </Card>
                     );
@@ -1171,12 +1333,12 @@ export default function Profile() {
             ) : (
               <Card className="p-8 text-center">
                 <Calendar className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-lg font-semibold mb-2">Belum Ada Riwayat</h3>
+                <h3 className="text-lg font-semibold mb-2">Belum Ada Riwayat Aktivitas</h3>
                 <p className="text-muted-foreground mb-4">
-                  Anda belum memiliki riwayat pemesanan atau pengisian saldo yang sesuai filter.
+                  Anda belum memiliki riwayat aktivitas, pemesanan, atau transaksi yang sesuai filter ini.
                 </p>
                 <Button onClick={() => navigate("/talents")}>
-                  Cari Talent
+                  Cari Teman Aktivitas
                 </Button>
               </Card>
             )}
@@ -2099,6 +2261,63 @@ export default function Profile() {
                 </div>
               );
             })()}
+          </DialogContent>
+        </Dialog>
+
+        {/* Modal Detail Komplain */}
+        <Dialog open={showComplaintDialog} onOpenChange={(open) => !open && setShowComplaintDialog(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-rose-500" />
+                Detail Laporan Komplain
+              </DialogTitle>
+            </DialogHeader>
+            {selectedComplaint && (
+              <div className="space-y-4 py-2 text-sm">
+                <div className="flex justify-between items-center pb-2 border-b">
+                  <span className="text-muted-foreground">Status</span>
+                  <Badge variant={selectedComplaint.status === "resolved" ? "success" : selectedComplaint.status === "in-progress" ? "accent" : "warning"}>
+                    {selectedComplaint.status === "resolved" ? "Selesai Ditangani" : selectedComplaint.status === "in-progress" ? "Sedang Diproses" : "Menunggu Peninjauan"}
+                  </Badge>
+                </div>
+                <div className="flex justify-between pb-2 border-b">
+                  <span className="text-muted-foreground">Mitra Terkait</span>
+                  <span className="font-medium">{selectedComplaint.talentName || "-"}</span>
+                </div>
+                <div className="flex justify-between pb-2 border-b">
+                  <span className="text-muted-foreground">ID Booking</span>
+                  <span className="font-mono text-xs">{selectedComplaint.bookingId || "-"}</span>
+                </div>
+                <div className="flex justify-between pb-2 border-b">
+                  <span className="text-muted-foreground">Waktu Laporan</span>
+                  <span>{selectedComplaint.createdAt ? new Date(selectedComplaint.createdAt).toLocaleString("id-ID") : "-"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block mb-1">Isi Keluhan:</span>
+                  <div className="bg-muted p-3 rounded-md text-xs whitespace-pre-wrap">{selectedComplaint.description}</div>
+                </div>
+                {selectedComplaint.adminNotes && (
+                  <div>
+                    <span className="text-muted-foreground block mb-1">Tanggapan / Solusi Admin:</span>
+                    <div className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 p-3 rounded-md text-xs">
+                      {selectedComplaint.adminNotes}
+                    </div>
+                  </div>
+                )}
+                {selectedComplaint.proofImage && (
+                  <div>
+                    <span className="text-muted-foreground block mb-1">Bukti Foto:</span>
+                    <img src={selectedComplaint.proofImage} alt="Bukti Komplain" className="w-full max-h-48 object-cover rounded-md border" />
+                  </div>
+                )}
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" className="w-full" onClick={() => setShowComplaintDialog(false)}>
+                Tutup
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

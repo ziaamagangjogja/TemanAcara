@@ -17,6 +17,9 @@ export interface MitraAccount {
   age?: number; // Tambahkan field umur
   description?: string;
   category?: string;
+  supportedActivities?: string[];
+  hobbies?: string;
+  specialistSkills?: string[];
   price?: number;
   experience_level?: string; // "pemula" | "menengah" | "mahir"
   price_expectation?: string; // "35k-50k" | "50k-85k" | "85k-130k" | ">130k"
@@ -49,10 +52,12 @@ export interface MitraRegistrationData {
   age?: number; // Tambahkan field umur
   description?: string;
   category?: string;
+  supported_activities?: string[];
+  hobbies?: string;
+  specialist_skills?: string[];
   price?: number;
   photo?: string;
   ktp?: string;
-  hobbies?: string;
   experience_level?: string;
   price_expectation?: string;
   social_media?: string;

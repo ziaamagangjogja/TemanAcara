@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Talent } from "@/data/mockData";
 import { getBookings, getTalentReviewStats } from "@/lib/bookingStore";
+import { getStartingPriceForTalent } from "@/data/pricingReference";
 
 interface TalentCardProps {
   talent: Talent;
@@ -67,7 +68,9 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
   const talentPhoto = talent.photo || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(talent.name)}`;
   const talentCity = talent.city || 'Indonesia';
   const talentAge = (talent.age && talent.age > 0) ? talent.age : 22;
-  const formattedPrice = formatPrice(talent.pricePerHour || talent.price || 100000);
+  const startingRate = getStartingPriceForTalent(talent);
+  const formattedPrice = formatPrice(startingRate.price);
+  const talentUnitLabel = startingRate.unitLabel;
   
   let badgeVariant: "default" | "secondary" | "destructive" | "outline" | "accent" | "success" = "secondary";
   let badgeText = "Offline";
@@ -79,12 +82,16 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
     badgeText = "Online & Offline";
   }
 
-  const displayedSkills = (talent.skills || []).slice(0, 3);
+  const profileSkills = [
+    ...(Array.isArray((talent as any).specialistSkills) ? (talent as any).specialistSkills : []),
+    ...(Array.isArray(talent.skills) ? talent.skills : []),
+  ];
+  const displayedSkills = [...new Set(profileSkills)].slice(0, 3);
 
   const { reviewCount: talentReviewCount, formattedRating: talentRating } = getTalentReviewStats(talent);
 
   return (
-    <Card hover className="overflow-hidden group">
+    <Card hover className="flex h-full flex-col overflow-hidden group">
       <div className="relative">
         {imageError ? (
           <div className="w-full aspect-[4/5] bg-gradient-to-br from-orange-400 to-amber-600 flex flex-col items-center justify-center text-white">
@@ -139,19 +146,22 @@ export const TalentCard = memo<TalentCardProps>(({ talent }) => {
         </div>
       </div>
 
-      <div className="p-4">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-1 text-primary font-bold">
-            <Clock className="w-4 h-4" />
-            <span>{formattedPrice}</span>
-            <span className="text-muted-foreground font-normal text-sm">/jam</span>
+      <div className="flex flex-1 flex-col p-4">
+        <div className="mb-4 flex flex-1 items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-col">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Mulai dari</span>
+            <div className="flex flex-wrap items-center gap-1 text-primary font-bold">
+              <Clock className="w-3.5 h-3.5 shrink-0" />
+              <span className="break-words">{formattedPrice}</span>
+              <span className="text-muted-foreground font-normal text-xs">{talentUnitLabel}</span>
+            </div>
           </div>
-          <Badge variant={badgeVariant}>
+          <Badge className="shrink-0 whitespace-nowrap" variant={badgeVariant}>
             {badgeText}
           </Badge>
         </div>
 
-        <Link to={`/talent/${talent.id}`}>
+        <Link to={`/talent/${talent.id}`} className="mt-auto block">
           <Button variant="hero" className="w-full">
             Pilih Teman
           </Button>

@@ -32,7 +32,9 @@ cd <YOUR_PROJECT_NAME>
 # Step 3: Install the necessary dependencies.
 npm i
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Step 4: Start both the frontend and backend services together.
+# Frontend akan buka di http://localhost:8080
+# Backend akan berjalan di http://localhost:3001
 npm run dev
 ```
 

@@ -68,7 +68,7 @@ export default function ChatList() {
   return (
     <div className="min-h-screen bg-gradient-warm pt-20 md:pt-24 pb-24 md:pb-8">
       <div className="container max-w-2xl">
-        <h1 className="text-3xl font-bold mb-6">Obrolan</h1>
+        <h1 className="text-3xl font-bold mb-6">Percakapan</h1>
 
         {/* Search */}
         <div className="relative mb-6">

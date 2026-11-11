@@ -53,11 +53,19 @@ import {
   updateBookingApproval
 } from "@/lib/bookingStore";
 import { formatPrice } from "@/lib/utils";
+import { MITRA_ACTIVITIES, normalizeMitraActivities } from "@/data/mitraActivities";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { EarningsDetails } from "@/components/mitra/EarningsDetails";
 import { saveCurrentMitraSession, clearCurrentMitraSession } from "@/lib/storageHelper";
 import { CitySelect } from "@/components/CitySelect";
+import {
+  MARKET_PRICE_GUIDE,
+  EXTRA_EXPENSES_DISCLAIMER,
+  formatRupiah,
+  getDefaultServicesForTalent,
+  getStartingPriceForTalent,
+} from "@/data/pricingReference";
 
 export default function Pengaturan() {
   const navigate = useNavigate();
@@ -94,6 +102,7 @@ export default function Pengaturan() {
     photo: "",
     city: "",
     category: "",
+    supportedActivities: [] as string[],
     description: "",
   });
 
@@ -104,6 +113,7 @@ export default function Pengaturan() {
       photo: currentMitra?.photo || "",
       city: currentMitra?.city || currentMitra?.address || "",
       category: currentMitra?.category || "",
+      supportedActivities: normalizeMitraActivities(currentMitra?.supportedActivities || currentMitra?.supported_activities),
       description: currentMitra?.description || "",
     });
     setShowEditProfile(true);
@@ -130,6 +140,10 @@ export default function Pengaturan() {
       toast({ title: "Nama wajib diisi", variant: "destructive" });
       return;
     }
+    if (profileForm.supportedActivities.length === 0) {
+      toast({ title: "Pilih aktivitas layanan", description: "Pilih minimal satu aktivitas yang bersedia Anda temani.", variant: "destructive" });
+      return;
+    }
     setIsSavingProfile(true);
     try {
       const updated = await updateMitraProfile({
@@ -137,6 +151,7 @@ export default function Pengaturan() {
         photo: profileForm.photo || undefined,
         city: profileForm.city || undefined,
         category: profileForm.category || undefined,
+        supportedActivities: profileForm.supportedActivities,
         description: profileForm.description || undefined,
       });
       setCurrentMitra(updated);
@@ -526,13 +541,18 @@ export default function Pengaturan() {
             <div className="flex-1">
               <h2 className="text-xl font-bold">{currentMitra?.name || "Mitra"}</h2>
               <p className="text-muted-foreground">{currentMitra?.email}</p>
-              <div className="flex items-center gap-2 mt-2">
+              <div className="flex flex-wrap items-center gap-2 mt-2">
                 <Badge variant={currentMitra?.verificationStatus === "approved" ? "success" : "warning"}>
                   {currentMitra?.verificationStatus === "approved" ? "Terverifikasi" : "Menunggu Verifikasi"}
                 </Badge>
                 <div className="flex items-center gap-1 text-sm text-muted-foreground">
                   <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
                   <span>{currentMitra?.rating || "0"}</span>
+                </div>
+                <div className="flex items-center gap-1 text-sm text-orange-600 font-bold bg-orange-50 dark:bg-orange-950/30 px-2 py-0.5 rounded-full border border-orange-200">
+                  <Coins className="w-3.5 h-3.5 text-orange-500" />
+                  <span>{formatRupiah(getStartingPriceForTalent(currentMitra).price)}</span>
+                  <span className="text-xs font-normal text-muted-foreground">mulai {getStartingPriceForTalent(currentMitra).unitLabel}</span>
                 </div>
               </div>
             </div>
@@ -600,6 +620,41 @@ export default function Pengaturan() {
               </div>
 
               <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label className="text-sm font-medium">Aktivitas yang Bersedia Ditemani</label>
+                  <span className="text-xs text-muted-foreground">{profileForm.supportedActivities.length} dipilih</span>
+                </div>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Hanya aktivitas yang dipilih ini yang akan tersedia untuk booking.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {MITRA_ACTIVITIES.map(({ id, label }) => {
+                    const selected = profileForm.supportedActivities.includes(id);
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setProfileForm((previous) => ({
+                          ...previous,
+                          supportedActivities: selected
+                            ? previous.supportedActivities.filter((activity) => activity !== id)
+                            : [...previous.supportedActivities, id],
+                        }))}
+                        className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                          selected
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border bg-background hover:border-primary/50"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
                 <label className="text-sm font-medium mb-2 block">Deskripsi Diri</label>
                 <textarea
                   className="w-full min-h-[90px] rounded-md border-input bg-background px-3 py-2 text-sm"
@@ -609,9 +664,38 @@ export default function Pengaturan() {
                 />
               </div>
 
-              <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg">
-                Catatan: Harga per jam ditentukan oleh admin dan tidak dapat diubah sendiri.
-              </p>
+              <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-3 text-xs">
+                <p className="font-semibold">Tarif layanan ditetapkan dan dikelola admin.</p>
+                <p className="mt-1 text-muted-foreground">
+                  Perubahan tarif per layanan atau paket dapat diajukan untuk ditinjau admin. Tarif pelanggan baru berlaku setelah disetujui.
+                </p>
+                <div className="mt-2 space-y-1">
+                  {getDefaultServicesForTalent(currentMitra).map((service) => (
+                    <div key={service.id} className="flex justify-between gap-3">
+                      <span>{service.category} ({service.unitLabel})</span>
+                      <strong>{formatRupiah(service.price)}</strong>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] text-orange-800">
+                  Acuan harga pasar untuk admin: {MARKET_PRICE_GUIDE.slice(0, 3).map((guide) =>
+                    `${guide.category} ${formatRupiah(guide.minPrice)}–${formatRupiah(guide.maxPrice)}`
+                  ).join("; ")}.
+                </p>
+                <p className="mt-1 text-[10px] text-orange-800">
+                  <strong>Biaya tambahan:</strong> {EXTRA_EXPENSES_DISCLAIMER}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => navigate("/mitra/verification")}
+                >
+                  <Coins className="mr-2 h-4 w-4" />
+                  Ajukan Perubahan Tarif
+                </Button>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowEditProfile(false)}>

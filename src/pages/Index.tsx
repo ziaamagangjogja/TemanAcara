@@ -26,9 +26,13 @@ export default function Index() {
 
     getAllVerifiedTalents().then(data => {
       if (Array.isArray(data) && data.length > 0) {
-        // Acak daftar teman agar teman unggulan selalu variatif dan adil
-        const shuffled = [...data].sort(() => Math.random() - 0.5);
-        setDisplayTalents(shuffled);
+        const orderedByRating = [...data].sort((a, b) => {
+          const ratingDifference = (b.rating || 0) - (a.rating || 0);
+          if (ratingDifference !== 0) return ratingDifference;
+          const reviewDifference = (b.reviewCount || 0) - (a.reviewCount || 0);
+          return reviewDifference || (a.name || "").localeCompare(b.name || "");
+        });
+        setDisplayTalents(orderedByRating);
         
         const verifiedCount = data.length;
         const uniqueCities = new Set(data.map(t => t.city).filter(Boolean)).size;

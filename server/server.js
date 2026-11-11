@@ -1,15 +1,68 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const crypto = require('crypto');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
 const multer = require('multer');
-const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
 
 const app = express();
+const MITRA_ACTIVITY_IDS = new Set([
+  'nongkrong', 'traveling', 'hiking', 'event', 'olahraga', 'kuliner',
+  'nonton', 'belanja', 'musik', 'gaming', 'fotografi', 'kerja-belajar',
+  'ngopi', 'online-chat', 'lainnya',
+]);
+const LEGACY_ACTIVITY_KEYWORDS = {
+  nongkrong: ['nongkrong', 'ngobrol', 'teman ngobrol', 'teman sosial'],
+  traveling: ['traveling', 'travelling', 'travel', 'liburan', 'wisata', 'tour guide', 'pemandu', 'jalan jalan', 'trip'],
+  hiking: ['hiking', 'mendaki', 'pendakian', 'naik gunung'],
+  event: ['event', 'acara', 'kondangan', 'wisuda', 'pernikahan', 'wedding', 'ulang tahun', 'seminar', 'konferensi', 'gathering', 'reuni', 'konser', 'festival', 'pesta', 'party', 'mc', 'host acara'],
+  olahraga: ['olahraga', 'gym', 'fitness', 'yoga', 'renang', 'basket', 'badminton', 'sepak bola', 'lari', 'workout', 'pelatih'],
+  kuliner: ['kuliner', 'makan', 'memasak', 'masak', 'cooking', 'chef', 'barista', 'food'],
+  nonton: ['nonton', 'film', 'bioskop', 'movie', 'cinema', 'series', 'drakor'],
+  belanja: ['belanja', 'shopping', 'mall', 'fashion'],
+  musik: ['musik', 'music', 'karaoke', 'konser', 'vokalis', 'gitar', 'musisi', 'penyanyi'],
+  gaming: ['gaming', 'game', 'gamer', 'mabar', 'esport'],
+  fotografi: ['fotografi', 'fotografer', 'photography', 'foto', 'videografer', 'editor'],
+  'kerja-belajar': ['kerja', 'meeting', 'belajar', 'diskusi', 'networking', 'membaca', 'penerjemah'],
+  ngopi: ['kopi', 'kafe', 'cafe', 'coffee', 'ngafe'],
+  'online-chat': ['online', 'video call', 'chat', 'daring'],
+};
+
+function inferLegacyActivities(profile) {
+  const legacyValues = [
+    profile.category,
+    profile.hobbies,
+    profile.specialist_skills,
+    profile.description,
+  ];
+  const text = legacyValues
+    .map((value) => {
+      if (typeof value !== 'string') return '';
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.join(' ') : value;
+      } catch {
+        return value;
+      }
+    })
+    .join(' ')
+    .toLocaleLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+  const activities = Object.entries(LEGACY_ACTIVITY_KEYWORDS)
+    .filter(([, keywords]) => keywords.some((keyword) =>
+      text.includes(keyword.toLocaleLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+    ))
+    .map(([activity]) => activity);
+  return activities.length > 0 ? activities : ['nongkrong'];
+}
 
 // Initialize MySQL pool
 const pool = mysql.createPool({
@@ -99,6 +152,9 @@ app.post('/register-talent', async (req, res) => {
     description,
     price,
     category,
+    supported_activities,
+    hobbies,
+    specialist_skills,
     photo,
     ktp,
     age,
@@ -109,6 +165,12 @@ app.post('/register-talent', async (req, res) => {
   } = req.body;
   
   try {
+    if (!Array.isArray(supported_activities) ||
+        supported_activities.length === 0 ||
+        supported_activities.some((activity) => !MITRA_ACTIVITY_IDS.has(activity))) {
+      return res.status(400).json({ message: 'Pilih minimal satu aktivitas yang bersedia Anda temani.' });
+    }
+
     const userId = crypto.randomUUID();
     
     // Check if email exists
@@ -120,8 +182,8 @@ app.post('/register-talent', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     await pool.query(
-      `INSERT INTO profiles (user_id, email, password, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO profiles (user_id, email, password, full_name, phone, address, description, price, category, supported_activities, hobbies, specialist_skills, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       [
         userId,
         email,
@@ -132,6 +194,9 @@ app.post('/register-talent', async (req, res) => {
         description,
         price || 0,
         category,
+        JSON.stringify(supported_activities),
+        hobbies || '[]',
+        JSON.stringify(Array.isArray(specialist_skills) ? specialist_skills : []),
         photo,
         ktp,
         age,
@@ -281,12 +346,12 @@ app.get('/api/mitra/status', async (req, res) => {
     let rows;
     if (userId) {
       [rows] = await pool.query(
-        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, portfolio_file, status, rejection_reason, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE user_id = ?',
+        'SELECT user_id, email, full_name, phone, address, description, price, service_rates, pending_service_rates, pricing_tier, price_accepted, category, supported_activities, hobbies, specialist_skills, photo, age, experience_level, price_expectation, social_media, portfolio_file, status, rejection_reason, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE user_id = ?',
         [userId]
       );
     } else {
       [rows] = await pool.query(
-        'SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, age, experience_level, price_expectation, social_media, portfolio_file, status, rejection_reason, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE email = ?',
+        'SELECT user_id, email, full_name, phone, address, description, price, service_rates, pending_service_rates, pricing_tier, price_accepted, category, supported_activities, hobbies, specialist_skills, photo, age, experience_level, price_expectation, social_media, portfolio_file, status, rejection_reason, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE email = ?',
         [email]
       );
     }
@@ -318,16 +383,42 @@ app.post('/api/mitra/accept-price', async (req, res) => {
 });
 
 app.post('/api/mitra/appeal-price', async (req, res) => {
-  const { email, userId, note, requestedPrice, appeal_file } = req.body;
+  const { email, userId, note, appeal_file } = req.body;
   if (!email && !userId) {
     return res.status(400).json({ message: 'Email atau userId dibutuhkan.' });
   }
+  const requestedRates = req.body.requestedRates;
+  if (!Array.isArray(requestedRates) || requestedRates.length === 0) {
+    return res.status(400).json({ message: 'Usulan tarif minimal harus berisi satu layanan.' });
+  }
+  const serviceIds = new Set();
+  for (const rate of requestedRates) {
+    if (!rate || typeof rate.id !== 'string' || !rate.id.trim() || serviceIds.has(rate.id)) {
+      return res.status(400).json({ message: 'Data layanan dalam usulan tarif tidak valid.' });
+    }
+    if (!Number.isFinite(Number(rate.price)) || Number(rate.price) <= 0) {
+      return res.status(400).json({ message: `Tarif untuk ${rate.category || rate.id} harus lebih besar dari nol.` });
+    }
+    serviceIds.add(rate.id);
+  }
+  const serializedRates = JSON.stringify(requestedRates.map((rate) => ({
+    id: rate.id,
+    category: String(rate.category || rate.id),
+    price: Number(rate.price),
+    unit: String(rate.unit || 'jam'),
+    unitLabel: String(rate.unitLabel || '/ jam'),
+    durationHint: String(rate.durationHint || ''),
+    description: String(rate.description || ''),
+    isActive: rate.isActive !== false,
+  })));
   try {
-    const formattedNote = `[BANDING TARIF: Rp ${Number(requestedPrice || 0).toLocaleString('id-ID')}/jam] ${note || ''}`;
-    await pool.query(
-      'UPDATE profiles SET appeal_note = ?, appeal_file = ?, admin_price_note = NULL WHERE email = ? OR user_id = ?',
-      [formattedNote, appeal_file || null, email || '', userId || '']
+    const [result] = await pool.query(
+      'UPDATE profiles SET pending_service_rates = ?, appeal_note = ?, appeal_file = ?, admin_price_note = NULL WHERE (email = ? OR user_id = ?) AND status = "approved"',
+      [serializedRates, String(note || 'Pengajuan perubahan tarif layanan').trim(), appeal_file || null, email || '', userId || '']
     );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Profil mitra yang disetujui tidak ditemukan.' });
+    }
     res.status(200).json({ message: 'Permohonan banding tarif Anda telah dikirim ke admin.' });
   } catch (error) {
     console.error('Error submitting appeal:', error);
@@ -335,13 +426,40 @@ app.post('/api/mitra/appeal-price', async (req, res) => {
   }
 });
 
+app.post('/api/admin/approve-service-prices', async (req, res) => {
+  const { email, userId } = req.body || {};
+  if (!email && !userId) {
+    return res.status(400).json({ message: 'Email atau userId dibutuhkan.' });
+  }
+  try {
+    const [result] = await pool.query(
+      `UPDATE profiles
+       SET service_rates = pending_service_rates,
+           pending_service_rates = NULL,
+           appeal_note = NULL,
+           appeal_file = NULL,
+           admin_price_note = 'Usulan tarif layanan disetujui admin.'
+       WHERE (email = ? OR user_id = ?) AND pending_service_rates IS NOT NULL`,
+      [email || '', userId || '']
+    );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Tidak ada usulan tarif layanan yang menunggu persetujuan.' });
+    }
+    res.status(200).json({ message: 'Tarif layanan yang diajukan berhasil disetujui.' });
+  } catch (error) {
+    console.error('Error approving service price proposal:', error);
+    res.status(500).json({ message: 'Gagal menyetujui usulan tarif layanan.', error: error.message });
+  }
+});
+
 // Endpoint untuk mengambil semua permohonan banding tarif mitra
 app.get('/api/admin/appeals', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT user_id, email, full_name, phone, address, description, price, pricing_tier, price_accepted, category, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status, appeal_note, appeal_file, admin_price_note, created_at 
-       FROM profiles 
-       WHERE appeal_note IS NOT NULL AND TRIM(appeal_note) != '' AND (price_accepted = 0 OR price_accepted IS NULL)
+      `SELECT user_id, email, full_name, phone, address, description, price, service_rates, pending_service_rates, pricing_tier, price_accepted, category, supported_activities, hobbies, specialist_skills, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status, appeal_note, appeal_file, admin_price_note, created_at
+       FROM profiles
+       WHERE pending_service_rates IS NOT NULL
+          OR (appeal_note IS NOT NULL AND TRIM(appeal_note) != '' AND (price_accepted = 0 OR price_accepted IS NULL))
        ORDER BY created_at DESC`
     );
     res.status(200).json(rows);
@@ -363,7 +481,7 @@ app.post('/api/admin/reject-appeal', async (req, res) => {
 
     // PERHATIKAN: status tetap "approved", price_accepted tetap 0, HANYA appeal_note yang direset ke NULL dan admin_price_note diisi alasan
     await pool.query(
-      'UPDATE profiles SET appeal_note = NULL, admin_price_note = ? WHERE email = ? OR user_id = ?',
+      'UPDATE profiles SET appeal_note = NULL, pending_service_rates = NULL, admin_price_note = ? WHERE email = ? OR user_id = ?',
       [rejectionNote, talentEmail || '', talentId || '']
     );
 
@@ -379,7 +497,7 @@ app.post('/api/admin/reject-appeal', async (req, res) => {
 app.get('/pending-talents', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE status = "pending"'
+      'SELECT user_id, email, full_name, phone, address, description, price, category, supported_activities, hobbies, specialist_skills, photo, ktp, age, experience_level, price_expectation, social_media, portfolio_file, status, appeal_note, appeal_file, admin_price_note, created_at FROM profiles WHERE status = "pending"'
     );
     res.status(200).json(rows);
   } catch (error) {
@@ -414,18 +532,19 @@ app.post('/send-reminder', async (req, res) => {
 });
 
 app.post('/send-approval', async (req, res) => {
-  const { talentEmail, talentName, loginLink, price, pricing_tier, admin_price_note } = req.body;
+  const { talentEmail, talentName, loginLink, price, pricing_tier, admin_price_note, service_rates } = req.body;
   try {
     const tier = pricing_tier || 'tier2';
+    const serializedRates = Array.isArray(service_rates) ? JSON.stringify(service_rates) : null;
     if (price !== undefined && price !== null && price !== '') {
       await pool.query(
-        'UPDATE profiles SET status = "approved", price = ?, pricing_tier = ?, admin_price_note = ?, appeal_note = NULL WHERE email = ?',
-        [price, tier, admin_price_note || null, talentEmail]
+        'UPDATE profiles SET status = "approved", price = ?, service_rates = COALESCE(?, service_rates), pending_service_rates = NULL, pricing_tier = ?, admin_price_note = ?, appeal_note = NULL WHERE email = ?',
+        [price, serializedRates, tier, admin_price_note || null, talentEmail]
       );
     } else {
       await pool.query(
-        'UPDATE profiles SET status = "approved", pricing_tier = ?, admin_price_note = ?, appeal_note = NULL WHERE email = ?',
-        [tier, admin_price_note || null, talentEmail]
+        'UPDATE profiles SET status = "approved", service_rates = COALESCE(?, service_rates), pending_service_rates = NULL, pricing_tier = ?, admin_price_note = ?, appeal_note = NULL WHERE email = ?',
+        [serializedRates, tier, admin_price_note || null, talentEmail]
       );
     }
     res.status(200).json({ message: 'Talent berhasil disetujui dan status telah diperbarui.' });
@@ -594,7 +713,7 @@ app.put('/api/users/:username', async (req, res) => {
 app.get('/api/talents', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT user_id, email, full_name, phone, address, description, price, category, photo, age, status, price_accepted, created_at FROM profiles WHERE status = "approved" AND price_accepted = 1'
+      'SELECT user_id, email, full_name, phone, address, description, price, service_rates, category, supported_activities, hobbies, specialist_skills, photo, age, experience_level, portfolio_file, status, price_accepted, created_at FROM profiles WHERE status = "approved" AND price_accepted = 1'
     );
     res.status(200).json(rows);
   } catch (error) {
@@ -606,14 +725,22 @@ app.put('/api/talents/:id', async (req, res) => {
   try {
     // Partial update: hanya field yang benar-benar dikirim (defined) yang diubah.
     // Ini mencegah field yang tidak dikirim tertimpa menjadi kosong.
-    const allowedFields = ['full_name', 'photo', 'address', 'category', 'description', 'price', 'age', 'phone'];
+    const allowedFields = ['full_name', 'photo', 'address', 'category', 'supported_activities', 'description', 'price', 'service_rates', 'age', 'phone'];
+    if (req.body.supported_activities !== undefined &&
+        (!Array.isArray(req.body.supported_activities) ||
+          req.body.supported_activities.length === 0 ||
+          req.body.supported_activities.some((activity) => !MITRA_ACTIVITY_IDS.has(activity)))) {
+      return res.status(400).json({ message: 'Pilih minimal satu aktivitas layanan yang valid.' });
+    }
     const updateFields = [];
     const updateValues = [];
 
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         updateFields.push(`${field} = ?`);
-        updateValues.push(req.body[field]);
+        updateValues.push(['service_rates', 'supported_activities'].includes(field) && Array.isArray(req.body[field])
+          ? JSON.stringify(req.body[field])
+          : req.body[field]);
       }
     }
 
@@ -859,6 +986,56 @@ app.get('/api/mitra-conduct/:mitraId', async (req, res) => {
 app.post('/api/bookings', async (req, res) => {
   try {
     const { id, user_id, user_name, talent_id, purpose, type, date, time, duration, total, meeting_city, payment_status, approval_status, payment_code, created_at, notes } = req.body;
+    const [talentRows] = await pool.query(
+      'SELECT supported_activities FROM profiles WHERE user_id = ? AND status = "approved" AND price_accepted = 1',
+      [talent_id]
+    );
+    if (talentRows.length > 0) {
+      let supportedActivities = [];
+      try {
+        const storedActivities = talentRows[0].supported_activities;
+        supportedActivities = Array.isArray(storedActivities)
+          ? storedActivities
+          : JSON.parse(storedActivities || '[]');
+      } catch {
+        supportedActivities = [];
+      }
+
+      const purposeKey = String(purpose || '').startsWith('Lainnya:')
+        ? 'Lainnya'
+        : String(purpose || '');
+      const purposeActivities = {
+        'Nongkrong / Ngobrol': ['nongkrong', 'ngopi', 'online-chat'],
+        'Dinner / Makan Malam': ['kuliner', 'ngopi', 'nongkrong'],
+        'Traveling / Liburan': ['traveling'],
+        Hiking: ['hiking'],
+        'Event / Acara': ['event'],
+        'Event / Wisuda atau Kelulusan': ['event'],
+        'Event / Pernikahan atau Kondangan': ['event'],
+        'Event / Ulang Tahun': ['event'],
+        'Event / Seminar atau Konferensi': ['event'],
+        'Event / Gathering atau Reuni': ['event'],
+        'Event / Konser atau Festival': ['event', 'musik'],
+        'Event / Acara Kantor': ['event'],
+        'Event / Acara Lainnya': ['event'],
+        'Nonton Film': ['nonton'],
+        Belanja: ['belanja'],
+        'Olahraga Bareng': ['olahraga'],
+        'Kerja / Meeting': ['kerja-belajar'],
+        'Pesta / Party': ['event', 'musik'],
+        'Jasa Fotografi': ['fotografi'],
+        Lainnya: ['lainnya'],
+        'Main Game Online': ['gaming'],
+        'Nonton Bareng Online': ['nonton'],
+        'Karaoke Online': ['musik'],
+        'Belajar / Diskusi': ['kerja-belajar', 'online-chat'],
+      };
+      const allowedActivities = purposeActivities[purposeKey] || [];
+      if (!Array.isArray(supportedActivities) || !allowedActivities.some((activity) => supportedActivities.includes(activity))) {
+        return res.status(400).json({ message: 'Aktivitas ini tidak termasuk layanan yang dipilih mitra.' });
+      }
+    }
+
     const [[sanction]] = await pool.query(
       'SELECT suspended_until FROM mitra_sanctions WHERE mitra_id = ? AND suspended_until > NOW()',
       [talent_id]
@@ -2168,8 +2345,36 @@ async function ensureTopUpTable() {
   }
 }
 
+async function ensureMitraPricingColumns() {
+  for (const column of ['service_rates', 'pending_service_rates', 'supported_activities', 'hobbies', 'specialist_skills']) {
+    try {
+      await pool.query(`ALTER TABLE profiles ADD COLUMN ${column} LONGTEXT NULL`);
+    } catch (error) {
+      if (!String(error.message || '').toLowerCase().includes('duplicate')) throw error;
+    }
+  }
+
+  const [legacyProfiles] = await pool.query(
+    `SELECT user_id, category, hobbies, specialist_skills, description
+     FROM profiles
+     WHERE supported_activities IS NULL
+        OR supported_activities = ''
+        OR supported_activities = '[]'`
+  );
+  for (const profile of legacyProfiles) {
+    const activities = inferLegacyActivities(profile);
+    await pool.query(
+      `UPDATE profiles SET supported_activities = ?
+       WHERE user_id = ?
+         AND (supported_activities IS NULL OR supported_activities = '' OR supported_activities = '[]')`,
+      [JSON.stringify(activities), profile.user_id]
+    );
+  }
+}
+
 const PORT = process.env.PORT || 3001;
 ensureTopUpTable()
+  .then(() => ensureMitraPricingColumns())
   .then(() => {
     startPendingBookingExpiryWorker();
     app.listen(PORT, () => {

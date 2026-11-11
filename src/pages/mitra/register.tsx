@@ -14,6 +14,8 @@ import { getCurrentUser } from "@/lib/userStore";
 import { talents } from "@/data/mockData";
 import { saveCurrentMitraSession } from "@/lib/storageHelper";
 import { CitySelect } from "@/components/CitySelect";
+import { EXTRA_EXPENSES_DISCLAIMER, MARKET_PRICE_GUIDE, formatRupiah } from "@/data/pricingReference";
+import { MITRA_ACTIVITIES } from "@/data/mitraActivities";
 
 const DEFAULT_HOBBIES = [
   "Kuliner & Kafe",
@@ -41,34 +43,57 @@ const SPECIALIST_SKILLS = [
   "Penerjemah Bahasa",
 ];
 
-const PRICE_OPTIONS = [
-  { value: "Rp 100.000 - Rp 200.000", label: "Rp 100.000 - Rp 200.000", recommendedFor: ["kasual"], autoTier: "kasual" },
-  { value: "Rp 200.000 - Rp 350.000", label: "Rp 200.000 - Rp 350.000", recommendedFor: ["acara"], autoTier: "acara" },
-  { value: "Rp 350.000 - Rp 500.000", label: "Rp 350.000 - Rp 500.000", recommendedFor: ["spesialis"], autoTier: "spesialis" },
-  { value: "> Rp 500.000", label: "> Rp 500.000 (VIP)", recommendedFor: ["spesialis"], autoTier: "spesialis" },
-];
-
-const SERVICE_TYPE_DETAILS: Record<string, {
-  title: string;
-  summary: string;
-  defaultPrice: string;
-}> = {
-  kasual: {
-    title: "Kasual & Santai",
-    summary: "Teman ngobrol, ngopi di kafe, nonton bioskop, kulineran, atau jalan santai di mall.",
-    defaultPrice: "Rp 100.000 - Rp 200.000",
-  },
-  acara: {
-    title: "Acara & Sosial",
-    summary: "Partner pendamping kondangan, wisuda, gathering kantor, reuni, atau pesta sosial.",
-    defaultPrice: "Rp 200.000 - Rp 350.000",
-  },
-  spesialis: {
-    title: "Spesialis / Pro",
-    summary: "Layanan berbasis keterampilan teruji (fotografer, pelatih gym, tour guide, dll).",
-    defaultPrice: "Rp 350.000 - Rp 500.000",
-  },
+const ACTIVITY_PRICE_GUIDES: Record<string, string[]> = {
+  nongkrong: ["kuliner"],
+  traveling: ["traveling-lokal", "traveling-seharian"],
+  hiking: ["traveling-lokal"],
+  event: ["event"],
+  olahraga: ["olahraga"],
+  kuliner: ["kuliner"],
+  nonton: ["nonton"],
+  belanja: ["nonton"],
+  musik: ["musik-karaoke"],
+  gaming: ["game-online"],
+  fotografi: ["fotografi"],
+  "kerja-belajar": ["online-session"],
+  ngopi: ["kuliner"],
+  "online-chat": ["online-session"],
+  lainnya: ["aktivitas-lainnya"],
 };
+
+function getSuggestedPricing(activityIds: string[], specialistSkills: string[]) {
+  const hasSpecialistSkills = specialistSkills.length > 0;
+  const hasTravel = activityIds.some((id) => id === "traveling" || id === "hiking");
+  const hasEvent = activityIds.includes("event");
+  const hasSport = activityIds.includes("olahraga");
+  const hasCasual = activityIds.some((id) =>
+    ["nongkrong", "kuliner", "nonton", "belanja", "musik", "gaming", "kerja-belajar", "ngopi", "online-chat"].includes(id)
+  );
+  const guides = [...new Set(activityIds.flatMap((id) => ACTIVITY_PRICE_GUIDES[id] || []))]
+    .map((id) => MARKET_PRICE_GUIDE.find((guide) => guide.id === id))
+    .filter((guide): guide is (typeof MARKET_PRICE_GUIDE)[number] => Boolean(guide));
+
+  if (hasSpecialistSkills) {
+    return {
+      tier: "spesialis",
+      expectation: "Disesuaikan admin berdasarkan keahlian dan portofolio",
+      guides,
+    };
+  }
+  if (hasTravel) {
+    return { tier: "acara", expectation: "Rp 150.000 - Rp 350.000", guides };
+  }
+  if (hasEvent) {
+    return { tier: "acara", expectation: "Rp 100.000 - Rp 300.000", guides };
+  }
+  if (hasSport) {
+    return { tier: "kasual", expectation: "Rp 50.000 - Rp 100.000", guides };
+  }
+  if (hasCasual) {
+    return { tier: "kasual", expectation: "Rp 30.000 - Rp 75.000", guides };
+  }
+  return { tier: "kasual", expectation: "Ditinjau admin sesuai aktivitas", guides };
+}
 
 export default function MitraRegister() {
   const navigate = useNavigate();
@@ -80,6 +105,7 @@ export default function MitraRegister() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [hasUserProfile, setHasUserProfile] = useState(false);
+  const [selectedActivities, setSelectedActivities] = useState<string[]>([]);
   const [selectedHobbies, setSelectedHobbies] = useState<string[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [customHobbies, setCustomHobbies] = useState<string[]>([]);
@@ -106,8 +132,6 @@ export default function MitraRegister() {
     description: "",
     ktpLink: "", // Hanya KTP yang menggunakan link Google Drive
     age: "", // Tambahkan field umur
-    experienceLevel: "acara",
-    priceExpectation: "Rp 250.000 - Rp 350.000",
     socialMedia: "",
   });
 
@@ -162,6 +186,14 @@ export default function MitraRegister() {
   const toggleHobby = (hobby: string) => {
     setSelectedHobbies(prev =>
       prev.includes(hobby) ? prev.filter(h => h !== hobby) : [...prev, hobby]
+    );
+  };
+
+  const toggleActivity = (activity: string) => {
+    setSelectedActivities((current) =>
+      current.includes(activity)
+        ? current.filter((item) => item !== activity)
+        : [...current, activity]
     );
   };
 
@@ -320,11 +352,10 @@ export default function MitraRegister() {
       return;
     }
 
-    const combinedCategories = [...selectedSkills, ...selectedHobbies];
-    if (combinedCategories.length === 0) {
+    if (selectedActivities.length === 0) {
       toast({
         title: "Registrasi Gagal",
-        description: "Pilih minimal satu hobi atau keahlian",
+        description: "Pilih minimal satu aktivitas yang bersedia Anda temani",
         variant: "destructive",
       });
       return;
@@ -341,7 +372,8 @@ export default function MitraRegister() {
     }
 
     // Validasi Portofolio: Wajib jika memilih layanan Spesialis / Pro
-    const isSpecialist = formData.experienceLevel === "spesialis";
+    const isSpecialist = selectedSkills.length > 0;
+    const suggestedPricing = getSuggestedPricing(selectedActivities, selectedSkills);
     const finalPortfolio = portfolioFile || portfolioLink.trim() || "";
 
     if (isSpecialist && selectedSkills.length === 0) {
@@ -372,12 +404,15 @@ export default function MitraRegister() {
         phone: formData.phone,
         address: formData.address,
         description: formData.description,
-        category: combinedCategories.join(", "),
+        category: [...selectedSkills, ...selectedHobbies].join(", "),
+        supported_activities: selectedActivities,
+        hobbies: JSON.stringify(selectedHobbies),
+        specialist_skills: selectedSkills,
         photo: finalPhoto, // Simpan foto profil
         ktp: formData.ktpLink, // Simpan KTP sebagai link Google Drive
         age: parseInt(formData.age), // Tambahkan umur
-        experience_level: formData.experienceLevel,
-        price_expectation: formData.priceExpectation,
+        experience_level: suggestedPricing.tier,
+        price_expectation: suggestedPricing.expectation,
         social_media: formData.socialMedia,
         portfolio_file: finalPortfolio,
         // Harga tidak disertakan karena akan ditentukan secara objektif oleh admin
@@ -393,11 +428,14 @@ export default function MitraRegister() {
         phone: formData.phone,
         address: formData.address,
         description: formData.description,
-        category: combinedCategories.join(", "),
+        category: [...selectedSkills, ...selectedHobbies].join(", "),
+        supportedActivities: selectedActivities,
+        hobbies: selectedHobbies.join(", "),
+        specialistSkills: selectedSkills,
         photo: finalPhoto,
         age: parseInt(formData.age),
-        experience_level: formData.experienceLevel,
-        price_expectation: formData.priceExpectation,
+        experience_level: suggestedPricing.tier,
+        price_expectation: suggestedPricing.expectation,
         social_media: formData.socialMedia,
         portfolio_file: finalPortfolio,
         status: "pending",
@@ -630,8 +668,46 @@ export default function MitraRegister() {
           {/* Informasi Talent Section */}
           <div className="space-y-4">
             <h2 className="text-lg font-semibold border-b pb-2">Informasi Talent</h2>
-            
-            {/* 1. Hobi & Minat Santai (Pill Badges) */}
+            <div className="space-y-3 rounded-xl border border-orange-200 bg-orange-50/40 p-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label className="flex items-center gap-1.5 text-xs font-semibold text-foreground sm:text-sm">
+                    <CheckCircle2 className="h-4 w-4 text-orange-600" />
+                    Aktivitas yang Bersedia Ditemani
+                    <span className="text-destructive">*</span>
+                  </Label>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Pilih hanya aktivitas yang siap Anda lakukan bersama pelanggan. Pilihan ini menentukan opsi booking yang tampil.
+                  </p>
+                </div>
+                <Badge variant="outline" className="shrink-0 border-orange-300 bg-white font-semibold text-orange-700">
+                  {selectedActivities.length} dipilih
+                </Badge>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {MITRA_ACTIVITIES.map(({ id, label }) => {
+                  const isSelected = selectedActivities.includes(id);
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => toggleActivity(id)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-all ${
+                        isSelected
+                          ? "border-orange-600 bg-orange-600 font-medium text-white"
+                          : "border-orange-200 bg-background text-foreground hover:border-orange-400 hover:bg-orange-50"
+                      }`}
+                    >
+                      {label}
+                      {isSelected && <Check className="h-3 w-3" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Hobi & Minat Santai (Pill Badges) */}
             <div className="space-y-2.5 p-3.5 rounded-xl bg-orange-50/40 border border-orange-200/70">
               <div className="flex items-center justify-between">
                 <div>
@@ -640,7 +716,7 @@ export default function MitraRegister() {
                     Hobi & Minat Santai
                   </Label>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    Pilih aktivitas santai yang Anda sukai untuk seru-seruan bareng klien
+                    Hobi pribadi untuk melengkapi profil; pilihan ini tidak otomatis menjadi layanan.
                   </p>
                 </div>
                 {selectedHobbies.length > 0 && (
@@ -729,7 +805,7 @@ export default function MitraRegister() {
               )}
             </div>
 
-            {/* 2. Keahlian Khusus / Spesialis (Pill Badges) */}
+            {/* Keahlian Khusus / Spesialis (Pill Badges) */}
             <div className="space-y-2.5 p-3.5 rounded-xl bg-card border border-border/80 shadow-2xs">
               <div className="flex items-center justify-between">
                 <div>
@@ -739,7 +815,7 @@ export default function MitraRegister() {
                     <span className="text-[11px] font-normal text-muted-foreground">(Opsional)</span>
                   </Label>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    Pilih jika Anda memiliki keterampilan profesional dengan portofolio
+                    Keahlian profesional Anda. Layanan yang ditawarkan tetap ditentukan pada pilihan aktivitas di atas.
                   </p>
                 </div>
                 {selectedSkills.length > 0 && (
@@ -827,28 +903,16 @@ export default function MitraRegister() {
                 </div>
               )}
 
-              {formData.experienceLevel === "spesialis" && selectedSkills.length === 0 && (
-                <p className="text-[11px] text-orange-700 font-medium">
-                  ⚠️ Anda memilih tipe layanan <strong>Spesialis / Pro</strong> di bawah. Silakan pilih minimal 1 keahlian khusus di atas.
-                </p>
-              )}
-
               {/* Bukti Portofolio / Karya Spesialis (Tab Bersih: Upload File / Link URL) */}
-              {(formData.experienceLevel === "spesialis" || selectedSkills.length > 0) && (
+              {selectedSkills.length > 0 && (
                 <div className="pt-3 mt-1 border-t border-border/60 space-y-2 animate-in fade-in duration-200">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                       <FileText className="w-3.5 h-3.5 text-orange-600" />
                       Bukti Portofolio / Karya
-                      {formData.experienceLevel === "spesialis" ? (
-                        <span className="text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.2 rounded">
-                          Wajib
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-normal text-muted-foreground">
-                          (Opsional)
-                        </span>
-                      )}
+                      <span className="text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.2 rounded">
+                        Wajib
+                      </span>
                     </span>
 
                     {/* Tab Switcher Minimalis */}
@@ -953,9 +1017,7 @@ export default function MitraRegister() {
                   )}
 
                   <p className="text-[10px] text-muted-foreground leading-normal">
-                    {formData.experienceLevel === "spesialis"
-                      ? "Lampirkan bukti karya atau sertifikat agar pengajuan tarif Spesialis / Pro Anda disetujui Admin."
-                      : "Opsional. Lampirkan jika ingin memperkuat profil keahlian Anda."}
+                    "Karena Anda memilih keahlian profesional, lampirkan bukti karya atau sertifikat untuk ditinjau admin."
                   </p>
                 </div>
               )}
@@ -972,99 +1034,51 @@ export default function MitraRegister() {
               />
             </div>
 
-            {/* Tipe Layanan Utama */}
-            <div className="space-y-2">
-              <Label className="font-semibold text-xs sm:text-sm text-foreground">
-                Tipe Layanan Utama
-              </Label>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: "kasual", title: "Kasual & Santai" },
-                  { id: "acara", title: "Acara & Sosial" },
-                  { id: "spesialis", title: "Spesialis / Pro" },
-                ].map((tier) => {
-                  const isSelected = formData.experienceLevel === tier.id;
-                  return (
-                    <button
-                      key={tier.id}
-                      type="button"
-                      onClick={() => {
-                        handleInputChange("experienceLevel", tier.id);
-                        const detail = SERVICE_TYPE_DETAILS[tier.id];
-                        if (detail) {
-                          handleInputChange("priceExpectation", detail.defaultPrice);
-                        }
-                      }}
-                      className={`py-2 px-2 rounded-xl border text-xs font-medium text-center transition-all ${
-                        isSelected
-                          ? "border-orange-500 bg-orange-500 text-white font-semibold shadow-xs ring-1 ring-orange-500"
-                          : "border-border hover:bg-muted/50 text-muted-foreground bg-card hover:border-orange-200"
-                      }`}
-                    >
-                      {tier.title}
-                    </button>
-                  );
-                })}
+            <section className="space-y-3 rounded-xl border border-orange-200 bg-orange-50/50 p-4" aria-label="Informasi penentuan tarif">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-orange-950">
+                  <Info className="h-4 w-4 text-orange-600" />
+                  Tarifnya ditentukan bagaimana?
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Anda tidak perlu memilih atau menghitung harga saat mendaftar. Admin menetapkan tarif resmi dari aktivitas yang Anda sanggupi; hobi hanya pelengkap, sedangkan keahlian profesional dan portofolio menjadi pertimbangan tambahan.
+                </p>
               </div>
 
-              {/* Penjelasan Ringkas & Bersih (1 kalimat tanpa box tebal yang penuh) */}
-              <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
-                {SERVICE_TYPE_DETAILS[formData.experienceLevel]?.summary}
+              {selectedActivities.length > 0 && (
+                <div className="rounded-lg border border-orange-100 bg-white/90 p-3">
+                  <p className="text-xs font-semibold text-foreground">Acuan untuk aktivitas pilihan Anda</p>
+                  {getSuggestedPricing(selectedActivities, selectedSkills).guides.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {getSuggestedPricing(selectedActivities, selectedSkills).guides.map((guide) => (
+                        <div key={guide.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs">
+                          <span className="font-medium">{guide.category}</span>
+                          <span className="font-semibold text-orange-700">
+                            {formatRupiah(guide.minPrice)}–{formatRupiah(guide.maxPrice)} {guide.unitLabel}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Tarif aktivitas ini akan ditinjau admin berdasarkan detail kebutuhan.
+                    </p>
+                  )}
+                  {selectedSkills.length > 0 && (
+                    <p className="mt-2 border-t border-orange-100 pt-2 text-xs text-muted-foreground">
+                      Tarif keahlian {selectedSkills.join(", ")} ditinjau admin bersama portofolio Anda.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <p className="text-xs text-orange-900">
+                Setelah disetujui, Anda akan melihat tarif resmi dan dapat meninjaunya sebelum layanan ditampilkan kepada pelanggan.
               </p>
-            </div>
-
-            {/* Ekspektasi Tarif per Jam (Mulai 100k - 500k dengan Ikon Gemini / Sparkle) */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="priceExpectation" className="font-semibold text-xs sm:text-sm text-foreground">
-                  Ekspektasi Tarif per Jam
-                </Label>
-                <span className="text-[11px] text-orange-700 bg-orange-50 border border-orange-200/60 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium">
-                  <Sparkles className="w-3 h-3 text-orange-500" />
-                  Rekomendasi
-                </span>
-              </div>
-
-              {/* Pilihan Tarif Bersih (Grid 2x2 Sempurna) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {PRICE_OPTIONS.map((item) => {
-                  const isSelected = formData.priceExpectation === item.value;
-                  const isRecommended = item.recommendedFor.includes(formData.experienceLevel);
-
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => {
-                        handleInputChange("priceExpectation", item.value);
-                        if (item.autoTier && formData.experienceLevel !== item.autoTier) {
-                          handleInputChange("experienceLevel", item.autoTier);
-                        }
-                      }}
-                      className={`flex items-center justify-between p-3 rounded-xl border text-xs transition-all ${
-                        isSelected
-                          ? "border-orange-500 bg-orange-50/90 text-orange-950 font-semibold ring-1 ring-orange-500 shadow-xs"
-                          : "border-border bg-card text-foreground hover:border-orange-300 hover:bg-orange-50/30"
-                      }`}
-                    >
-                      <div className="flex items-baseline gap-1.5 min-w-0 pr-1">
-                        <span className="font-semibold text-xs whitespace-nowrap">{item.label}</span>
-                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">/ jam</span>
-                      </div>
-
-                      {isRecommended && (
-                        <span
-                          title="Rekomendasi sesuai tipe layanan Anda"
-                          className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 bg-orange-100/90 px-1.5 py-0.5 rounded-full shrink-0"
-                        >
-                          <Sparkles className="w-3 h-3 text-orange-500" />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                {EXTRA_EXPENSES_DISCLAIMER}
+              </p>
+            </section>
 
             {/* Akun Media Sosial / Portofolio */}
             <div className="space-y-1.5">

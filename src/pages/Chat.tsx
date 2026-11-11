@@ -228,13 +228,13 @@ export default function UserChat() {
   };
 
   if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4"><Loader2 className="animate-spin w-8 h-8 text-primary" /></div>;
-  if (!session) return <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4"><Card className="p-8 text-center"><h2 className="text-xl font-bold mb-2">Chat tidak ditemukan</h2><Button onClick={() => navigate('/')}>Kembali</Button></Card></div>;
+  if (!session) return <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4"><Card className="p-8 text-center"><h2 className="text-xl font-bold mb-2">Chat tidak ditemukan</h2><Button onClick={() => navigate('/chat')}>Kembali</Button></Card></div>;
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6">
       <div className="container max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/')}><ArrowLeft className="w-5 h-5" /></Button>
+          <Button variant="ghost" size="icon" onClick={() => navigate('/chat')} aria-label="Kembali ke daftar percakapan"><ArrowLeft className="w-5 h-5" /></Button>
           <div className="flex items-center gap-3">
             <img src={session.talentPhoto} alt={session.talentName} className="w-10 h-10 rounded-full object-cover border" />
             <div><h3 className="font-semibold">{session.talentName}</h3><p className="text-sm text-muted-foreground">{session.purpose} • {session.duration} jam</p></div>

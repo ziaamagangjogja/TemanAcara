@@ -94,6 +94,13 @@ import {
   createAdminProfitDisbursement,
   WithdrawalRequest
 } from "@/lib/withdrawalStore";
+import {
+  getDefaultServicesForTalent,
+  getStartingPriceForTalent,
+  parseMitraServiceRates,
+  type MitraServiceRate,
+} from "@/data/pricingReference";
+import { getMitraActivityLabels } from "@/data/mitraActivities";
 
 // Tambahkan tipe untuk status pembayaran
 // Catatan: SharedBooking memakai "pending" | "paid", jadi samakan agar konsisten.
@@ -121,6 +128,9 @@ type VerificationItem = {
   phone?: string;
   address?: string;
   category?: string;
+  supported_activities?: string[];
+  hobbies?: string;
+  specialist_skills?: string[];
   description?: string;
   price?: number;
   age?: number;
@@ -133,7 +143,25 @@ type VerificationItem = {
   appeal_file?: string | null;
   portfolio_file?: string | null;
   admin_price_note?: string;
+  serviceRates?: MitraServiceRate[];
+  pendingServiceRates?: MitraServiceRate[];
 };
+
+function parseStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === "string");
+    }
+  } catch {
+    // Older entries may have comma-separated values.
+  }
+  return value.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
+}
 
 // Interface untuk pembagian pembayaran
 interface PaymentSplit {
@@ -216,9 +244,9 @@ export default function Admin() {
   // State untuk dialog harga & rubrik tiering
   const [showPriceDialog, setShowPriceDialog] = useState(false);
   const [selectedTalentForPrice, setSelectedTalentForPrice] = useState<VerificationItem | null>(null);
-  const [talentPrice, setTalentPrice] = useState<string>("");
   const [selectedPricingTier, setSelectedPricingTier] = useState<string>("tier2");
   const [adminPriceNotes, setAdminPriceNotes] = useState<string>("");
+  const [adminServiceRates, setAdminServiceRates] = useState<MitraServiceRate[]>([]);
   const [verificationChecklist, setVerificationChecklist] = useState({
     ktpValid: true,
     profileValid: true,
@@ -630,6 +658,9 @@ export default function Admin() {
           phone: mitra.phone,
           address: mitra.address,
           category: mitra.category,
+          supported_activities: parseStringArray(mitra.supported_activities),
+          hobbies: mitra.hobbies || "",
+          specialist_skills: parseStringArray(mitra.specialist_skills),
           description: mitra.description,
           price: mitra.price,
           age: mitra.age,
@@ -673,6 +704,9 @@ export default function Admin() {
             phone: mitra.phone,
             address: mitra.address,
             category: mitra.category,
+            supported_activities: parseStringArray(mitra.supported_activities),
+            hobbies: mitra.hobbies || "",
+            specialist_skills: parseStringArray(mitra.specialist_skills),
             description: mitra.description,
             price: Number(mitra.price) || 0,
             age: mitra.age,
@@ -685,6 +719,8 @@ export default function Admin() {
             pricing_tier: mitra.pricing_tier || "tier2",
             appeal_note: mitra.appeal_note,
             admin_price_note: mitra.admin_price_note,
+            serviceRates: parseMitraServiceRates(mitra.service_rates),
+            pendingServiceRates: parseMitraServiceRates(mitra.pending_service_rates),
           };
         });
           startTransition(() => {
@@ -1508,61 +1544,47 @@ export default function Admin() {
       return;
     }
 
-    // Hitung rekomendasi tier & tarif awal otomatis berdasarkan pilihan ekspektasi tarif & keahlian calon mitra
-    const exp = (mitra.experience_level || "").toLowerCase();
-    const priceExp = (mitra.price_expectation || "");
-    const cat = (mitra.category || "").toLowerCase();
+    // Hitung rekomendasi tier & tarif awal otomatis berdasarkan acuan pasar realistis
+    const activityIds = parseStringArray(mitra.supported_activities);
+    const specialistSkills = parseStringArray(mitra.specialist_skills);
+    let defaultTier = "kasual";
+    let defaultPrice = "50000";
 
-    let defaultTier = "tier2";
-    let defaultPrice = "250000";
-
-    // Prioritaskan ekspektasi tarif yang dipilih langsung oleh calon mitra saat pendaftaran
-    if (
-      priceExp.includes("100.000") ||
-      (priceExp.includes("200.000") && !priceExp.includes("350.000")) ||
-      exp === "kasual" ||
-      exp === "pemula"
-    ) {
-      defaultTier = "tier1";
+    if (specialistSkills.length > 0) {
+      defaultTier = "spesialis";
+      defaultPrice = "100000";
+    } else if (activityIds.includes("traveling") || activityIds.includes("hiking")) {
+      defaultTier = "traveling-lokal";
+      defaultPrice = "200000";
+    } else if (activityIds.includes("event")) {
+      defaultTier = "event";
       defaultPrice = "150000";
-    } else if (
-      priceExp.includes("350.000") ||
-      (priceExp.includes("500.000") && !priceExp.includes(">")) ||
-      exp === "spesialis" ||
-      exp === "mahir" ||
-      cat.includes("foto") ||
-      cat.includes("video") ||
-      cat.includes("gym") ||
-      cat.includes("coach") ||
-      cat.includes("tour")
-    ) {
-      defaultTier = "tier3";
-      defaultPrice = "400000";
-    } else if (priceExp.includes(">") || priceExp.includes("500.000") || exp === "vip") {
-      defaultTier = "tier4";
-      defaultPrice = "500000";
-    } else {
-      // Default: Tier 2 (Acara & Sosial: Rp 200.000 - Rp 350.000)
-      defaultTier = "tier2";
-      defaultPrice = "250000";
+    } else if (activityIds.includes("fotografi")) {
+      defaultTier = "spesialis";
+      defaultPrice = "100000";
+    } else if (activityIds.includes("olahraga")) {
+      defaultTier = "olahraga";
+      defaultPrice = "75000";
     }
-
-    // Jika mitra memiliki harga banding atau harga yang telah diajukan spesifik
-    const finalInitialPrice = (mitra.price && Number(mitra.price) > 0) ? String(mitra.price) : defaultPrice;
 
     setSelectedTalentForPrice(mitra);
     setSelectedPricingTier(defaultTier);
-    setTalentPrice(finalInitialPrice);
+    const suggestedRates = getDefaultServicesForTalent({
+      price: mitra.status === "approved" && Number(mitra.price) > 0
+        ? Number(mitra.price)
+        : Number(defaultPrice),
+      services: mitra.pendingServiceRates?.length
+        ? mitra.pendingServiceRates
+        : mitra.serviceRates,
+      category: mitra.category || "",
+      skills: typeof mitra.category === "string" ? mitra.category.split(",").map((skill) => skill.trim()) : [],
+      supportedActivities: activityIds,
+      specialistSkills,
+      hobbies: mitra.hobbies || "",
+    });
+    setAdminServiceRates(suggestedRates);
     setAdminPriceNotes(
-      `Disetujui ${
-        defaultTier === "tier3"
-          ? "Tier 3 (Spesialis & Pro)"
-          : defaultTier === "tier4"
-          ? "Tier 4 (VIP / Eksklusif)"
-          : defaultTier === "tier1"
-          ? "Tier 1 (Kasual & Santai)"
-          : "Tier 2 (Acara & Sosial)"
-      } sesuai kualifikasi dan ekspektasi mitra.`
+      `Tarif ditinjau berdasarkan aktivitas ${activityIds.join(", ") || "yang tersedia"}, keahlian, dan portofolio.`
     );
     setVerificationChecklist({ ktpValid: true, profileValid: true, skillValid: true });
     setShowPriceDialog(true);
@@ -1571,33 +1593,36 @@ export default function Admin() {
   const handleSavePriceAndApprove = async () => {
     if (!selectedTalentForPrice) return;
 
-    if (!talentPrice || isNaN(Number(talentPrice)) || Number(talentPrice) < 0) {
+    if (adminServiceRates.length === 0 || adminServiceRates.some((rate) => rate.price <= 0)) {
       toast({
-        title: "Harga Tidak Valid",
-        description: "Masukkan harga yang valid (angka positif).",
-        variant: "destructive"
+        title: "Tarif Layanan Tidak Valid",
+        description: "Tentukan tarif resmi lebih besar dari nol untuk setiap layanan.",
+        variant: "destructive",
       });
       return;
     }
+
+    const startingPrice = getStartingPriceForTalent({ services: adminServiceRates }).price;
 
     try {
       await approveMitra(
         selectedTalentForPrice.id,
         selectedTalentForPrice.email,
         selectedTalentForPrice.name,
-        Number(talentPrice),
+        startingPrice,
         selectedPricingTier,
-        adminPriceNotes
+        adminPriceNotes,
+        adminServiceRates
       );
 
       toast({
         title: "Mitra Berhasil Diverifikasi 🎉",
-        description: `${selectedTalentForPrice.name} disetujui di ${selectedPricingTier.toUpperCase()} dengan tarif ${formatCurrency(Number(talentPrice))}/jam.`
+        description: `${selectedTalentForPrice.name} disetujui dengan ${adminServiceRates.length} tarif layanan/paket resmi.`
       });
 
       setShowPriceDialog(false);
       setSelectedTalentForPrice(null);
-      setTalentPrice("");
+      setAdminServiceRates([]);
 
       loadVerifications();
       const verifiedTalents = await getAllVerifiedTalents() || [];
@@ -1673,6 +1698,13 @@ export default function Admin() {
         category: editTalentForm.category || undefined,
         description: editTalentForm.description || undefined,
         price: priceNumber,
+        services: getDefaultServicesForTalent({
+          ...editPriceTalent,
+          price: priceNumber,
+          category: editTalentForm.category || "",
+          skills: editTalentForm.category.split(",").map((skill) => skill.trim()),
+          services: [],
+        }),
         phone: editTalentForm.phone || undefined,
         age: editTalentForm.age ? Number(editTalentForm.age) : undefined,
       });
@@ -1746,6 +1778,35 @@ export default function Admin() {
     setShowRejectAppealDialog(true);
   };
 
+  const handleApproveServiceRateProposal = async (talent: VerificationItem) => {
+    try {
+      const response = await fetch("/api/admin/approve-service-prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: talent.email, userId: talent.id }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || "Gagal menyetujui usulan tarif layanan.");
+      }
+
+      toast({
+        title: "Usulan Tarif Disetujui",
+        description: `Tarif layanan ${talent.name} sudah diperbarui dan akan digunakan di booking berikutnya.`,
+      });
+      await loadVerifications();
+      const verifiedTalents = await getAllVerifiedTalents();
+      setAllTalents(verifiedTalents);
+      updateStats(verifiedTalents);
+    } catch (error) {
+      toast({
+        title: "Gagal Menyetujui Tarif",
+        description: error instanceof Error ? error.message : "Terjadi kesalahan saat menyetujui tarif.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleConfirmRejectAppeal = async () => {
     if (!appealTalentToReject) return;
     setIsRejectingAppeal(true);
@@ -1770,8 +1831,8 @@ export default function Admin() {
       }
 
       toast({
-        title: "Banding Tarif Ditolak",
-        description: `Banding ${appealTalentToReject.name} ditolak. Calon mitra tetap berstatus disetujui dengan tarif awal ${formatCurrency(appealTalentToReject.price || 0)}/jam.`,
+        title: "Usulan Tarif Ditolak",
+        description: `Usulan tarif ${appealTalentToReject.name} ditolak. Tarif resmi sebelumnya tetap berlaku.`,
       });
 
       setShowRejectAppealDialog(false);
@@ -3143,6 +3204,29 @@ export default function Admin() {
                             </div>
                           )}
 
+                          {user.pendingServiceRates && user.pendingServiceRates.length > 0 && (
+                            <div className="mt-3 rounded-xl border border-orange-200 bg-orange-50/60 p-3">
+                              <p className="text-xs font-bold mb-2">Tarif yang diusulkan mitra</p>
+                              <div className="space-y-1.5">
+                                {user.pendingServiceRates.map((rate) => {
+                                  const currentRate = user.serviceRates?.find((item) => item.id === rate.id);
+                                  return (
+                                    <div key={rate.id} className="flex items-center justify-between gap-3 text-xs">
+                                      <span>{rate.category} <span className="text-muted-foreground">{rate.unitLabel}</span></span>
+                                      <span className="text-right">
+                                        {currentRate && <span className="text-muted-foreground line-through mr-2">{formatCurrency(currentRate.price)}</span>}
+                                        <strong>{formatCurrency(rate.price)}</strong>
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="mt-2 text-[10px] text-muted-foreground">
+                                Tarif resmi saat ini tetap berlaku sampai admin menyetujui usulan.
+                              </p>
+                            </div>
+                          )}
+
                           {/* Parameter Penilaian Calon Mitra */}
                           <div className="mt-3 pt-3 border-t space-y-1.5 text-xs">
                             <div className="flex flex-wrap items-center gap-1.5">
@@ -3231,14 +3315,25 @@ export default function Admin() {
                           </div>
 
                           <div className="flex flex-wrap gap-2 mt-4">
-                            <Button
-                              size="sm"
-                              className="gap-1 flex-1 bg-amber-500 hover:bg-amber-600 text-white font-medium shadow-xs"
-                              onClick={() => handleAcceptVerification(user.id)}
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              Tanggapi & Sesuaikan Tarif
-                            </Button>
+                            {user.pendingServiceRates && user.pendingServiceRates.length > 0 ? (
+                              <Button
+                                size="sm"
+                                className="gap-1 flex-1 bg-green-600 hover:bg-green-700 text-white font-medium shadow-xs"
+                                onClick={() => handleApproveServiceRateProposal(user)}
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                Setujui Tarif Usulan
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                className="gap-1 flex-1 bg-amber-500 hover:bg-amber-600 text-white font-medium shadow-xs"
+                                onClick={() => handleAcceptVerification(user.id)}
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                Tanggapi & Sesuaikan Tarif
+                              </Button>
+                            )}
                             <Button
                               size="sm"
                               variant="outline"
@@ -5482,7 +5577,7 @@ export default function Admin() {
               Detail & Persetujuan Tarif Calon Mitra
             </DialogTitle>
             <p className="text-xs text-muted-foreground">
-              Tinjau data calon mitra dan tentukan tarif per jam resmi sebelum menerbitkan profil ke pencarian publik.
+              Tinjau data calon mitra dan tentukan tarif resmi untuk setiap layanan/paket sebelum menerbitkan profil.
             </p>
           </DialogHeader>
 
@@ -5583,113 +5678,64 @@ export default function Admin() {
                 </div>
               </div>
 
-              {/* Callout Banner: Ekspektasi Tarif Mitra */}
-              <div className="p-3.5 rounded-xl bg-orange-500/10 border border-orange-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-1.5 font-bold text-orange-950">
-                    <Sparkles className="w-4 h-4 text-orange-600" />
-                    Pilihan Ekspektasi Calon Mitra:
-                    <span className="text-orange-600 underline ml-0.5">
-                      {selectedTalentForPrice.price_expectation || "Rp 200.000 - Rp 350.000"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-orange-800">
-                    Kategori Layanan:{" "}
-                    <strong>
-                      {selectedTalentForPrice.experience_level === "spesialis" || selectedTalentForPrice.experience_level === "mahir"
-                        ? "Keahlian Khusus / Spesialis"
-                        : selectedTalentForPrice.experience_level === "kasual" || selectedTalentForPrice.experience_level === "pemula"
-                        ? "Kasual & Santai"
-                        : "Acara & Sosial"}
-                    </strong>
-                  </p>
-                </div>
-                <Badge className="bg-orange-600 hover:bg-orange-700 text-white shrink-0 self-start sm:self-auto text-[10px]">
-                  ✨ Rekomendasi Terpilih
-                </Badge>
-              </div>
-
-              {/* Rubrik Standar Tier Tarif RentMate */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-semibold text-foreground">
-                    Rubrik Standar Tier Tarif RentMate
-                  </Label>
-                  <span className="text-[11px] text-muted-foreground">Pilih tier untuk mengisi tarif otomatis</span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {[
-                    { id: "tier1", name: "Tier 1: Kasual", range: "100k - 200k", price: 150000, desc: "Hangout santai & kuliner" },
-                    { id: "tier2", name: "Tier 2: Acara & Sosial", range: "200k - 350k", price: 250000, desc: "Kondangan, gathering" },
-                    { id: "tier3", name: "Tier 3: Spesialis / Pro", range: "350k - 500k", price: 400000, desc: "Foto, gym, tour, coach" },
-                    { id: "tier4", name: "Tier 4: VIP / Eksklusif", range: "> 500k", price: 500000, desc: "Event formal & VIP" },
-                  ].map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedPricingTier(t.id);
-                        setTalentPrice(String(t.price));
-                      }}
-                      className={`p-3 rounded-xl border text-left transition-all relative ${
-                        selectedPricingTier === t.id
-                          ? "border-orange-500 bg-orange-50/80 ring-2 ring-orange-500/40 shadow-xs"
-                          : "border-border hover:border-orange-300 bg-card hover:bg-muted/20"
-                      }`}
-                    >
-                      {selectedPricingTier === t.id && (
-                        <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-orange-500" />
-                      )}
-                      <div className="text-[11px] font-bold text-foreground leading-tight">{t.name}</div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">{t.range}</div>
-                      <div className="text-sm font-extrabold text-orange-600 mt-1">
-                        {formatCurrency(t.price)}
-                        <span className="text-[10px] font-normal text-muted-foreground">/jam</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Penyesuaian Harga Final & Catatan Admin */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-muted/30 rounded-xl border">
+              <div className="space-y-2 rounded-lg border bg-muted/20 p-3 text-xs">
                 <div>
-                  <Label htmlFor="talent-price-input" className="text-xs font-semibold mb-1 block">
-                    Tarif Resmi per Jam (Rp)
-                  </Label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-xs font-bold text-muted-foreground">Rp</span>
+                  <span className="font-semibold">Aktivitas yang ditawarkan: </span>
+                  {selectedTalentForPrice.supported_activities?.length
+                    ? getMitraActivityLabels(selectedTalentForPrice.supported_activities).join(", ")
+                    : "Belum tercatat"}
+                </div>
+                <div>
+                  <span className="font-semibold">Keahlian spesialis: </span>
+                  {selectedTalentForPrice.specialist_skills?.length
+                    ? selectedTalentForPrice.specialist_skills.join(", ")
+                    : "Tidak mencantumkan"}
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
+                Tentukan harga untuk setiap aktivitas yang dipilih. Harga per jam, per acara, atau per paket akan ditampilkan sesuai satuannya. Aktivitas lain tidak ditambahkan.
+              </div>
+
+              <div className="space-y-2 rounded-xl border bg-background p-3.5">
+                <div>
+                  <p className="text-xs font-semibold">Isi tarif untuk aktivitas ini</p>
+                  <p className="text-[11px] text-muted-foreground">Calon mitra hanya akan ditawari aktivitas yang tercantum di atas.</p>
+                </div>
+                {adminServiceRates.length > 0 ? adminServiceRates.map((rate, index) => (
+                  <div key={rate.id} className="grid grid-cols-[1fr_150px] items-center gap-3 rounded-lg border p-2.5">
+                    <div>
+                      <p className="text-xs font-medium">{rate.category}</p>
+                      <p className="text-[10px] text-muted-foreground">{rate.unitLabel}</p>
+                    </div>
                     <Input
-                      id="talent-price-input"
                       type="number"
-                      placeholder="Masukkan tarif per jam"
-                      value={talentPrice}
-                      onChange={(e) => setTalentPrice(e.target.value)}
-                      className="pl-9 h-10 font-bold text-base"
-                      min={10000}
+                      min={1}
+                      value={rate.price}
+                      aria-label={`Tarif resmi ${rate.category}`}
+                      onChange={(e) => setAdminServiceRates((current) => current.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, price: Number(e.target.value) } : item
+                      ))}
                     />
                   </div>
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Tarif resmi yang dibayarkan klien saat booking mitra.
+                )) : (
+                  <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
+                    Belum ada aktivitas yang dapat diberi tarif. Periksa pilihan aktivitas mitra sebelum menyetujui.
                   </p>
-                </div>
+                )}
+              </div>
 
-                <div>
-                  <Label htmlFor="admin-price-notes" className="text-xs font-semibold mb-1 block">
-                    Justifikasi / Catatan Audit Admin
-                  </Label>
-                  <Input
-                    id="admin-price-notes"
-                    placeholder="Contoh: Disetujui Tier 3 sesuai portofolio & ekspektasi"
-                    value={adminPriceNotes}
-                    onChange={(e) => setAdminPriceNotes(e.target.value)}
-                    className="h-10 text-xs"
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Catatan arsip dan pertimbangan yang dikirim ke calon mitra.
-                  </p>
-                </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="admin-price-notes" className="text-xs font-semibold">
+                  Catatan singkat untuk mitra (boleh dikosongkan)
+                </Label>
+                <Input
+                  id="admin-price-notes"
+                  placeholder="Contoh: Tarif fotografi sesuai pengalaman dan portofolio."
+                  value={adminPriceNotes}
+                  onChange={(e) => setAdminPriceNotes(e.target.value)}
+                  className="h-10 text-xs"
+                />
               </div>
 
               {/* Checklist Kelayakan Verifikasi Ramping */}
@@ -5736,8 +5782,8 @@ export default function Admin() {
             <Button
               onClick={handleSavePriceAndApprove}
               disabled={
-                !talentPrice ||
-                Number(talentPrice) < 10000 ||
+                adminServiceRates.length === 0 ||
+                adminServiceRates.some((rate) => rate.price <= 0) ||
                 !verificationChecklist.ktpValid ||
                 !verificationChecklist.profileValid
               }

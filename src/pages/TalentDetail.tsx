@@ -9,13 +9,25 @@ import {
   Share2,
   Shield,
   MessageCircle,
+  Sparkles,
+  Info,
+  Clock,
+  AlertCircle,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
+import { getMitraActivityLabels } from "@/data/mitraActivities";
 import { refreshBookingsFromSupabase } from "@/lib/bookingStore";
+import {
+  getDefaultServicesForTalent,
+  getStartingPriceForTalent,
+  EXTRA_EXPENSES_DISCLAIMER,
+  formatRupiah
+} from "@/data/pricingReference";
 
 // Bentuk data talent yang benar-benar dipakai halaman ini. Field dari API
 // (getAllVerifiedTalents) bersifat opsional karena talent legacy memakai field
@@ -35,6 +47,10 @@ interface TalentView {
   description?: string;
   hobbies?: string;
   skills?: string[];
+  supportedActivities?: string[];
+  specialistSkills?: string[];
+  experienceLevel?: string;
+  portfolioFile?: string;
   rules?: string[];
   rating?: number;
   reviewCount?: number;
@@ -202,13 +218,19 @@ export default function TalentDetail() {
     });
   };
 
-  // Harga efektif; hindari menampilkan "Rp 0" saat data harga tidak tersedia.
-  const talentPrice =
-    (typeof talent?.price === "number" && talent.price > 0 ? talent.price : undefined) ??
-    (typeof talent?.pricePerHour === "number" && talent.pricePerHour > 0 ? talent.pricePerHour : undefined);
+  // Harga awal acuan ("Mulai dari") yang sinkron dengan layanan terendah mitra
+  const startingRate = useMemo(() => getStartingPriceForTalent(talent), [talent]);
+  const talentPrice = startingRate.price;
+  const talentUnitLabel = startingRate.unitLabel;
 
   // Link booking memakai talentId bila tersedia (konsisten dengan store lain).
   const bookingId = talent?.talentId || talent?.id;
+  const portfolioFile = talent?.portfolioFile || "";
+  const isImagePortfolio = /^data:image\/(?:jpeg|png|webp);base64,/i.test(portfolioFile);
+  const isSafePortfolioLink =
+    /^https?:\/\//i.test(portfolioFile) ||
+    /^data:application\/pdf;base64,/i.test(portfolioFile) ||
+    isImagePortfolio;
 
   const handleShare = useCallback(async () => {
     if (!talent) return;
@@ -363,7 +385,7 @@ export default function TalentDetail() {
                     <span className="text-3xl font-bold text-primary">
                       {talentPrice ? formatPrice(talentPrice) : "Harga belum tersedia"}
                     </span>
-                    {talentPrice && <span className="text-muted-foreground">/jam</span>}
+                    {talentPrice && <span className="text-muted-foreground">{talentUnitLabel}</span>}
                   </div>
                 </div>
                 <Badge variant={talent.availability === "online" ? "accent" : talent.availability === "offline" ? "secondary" : "success"} className="text-sm px-4 py-2">
@@ -372,27 +394,120 @@ export default function TalentDetail() {
               </div>
             </Card>
 
-            {/* Skills/Hobbies */}
+            {/* Pilihan Layanan & Tarif */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-primary" /> Pilihan Layanan & Satuan Tarif
+                </h3>
+                <span className="text-xs text-muted-foreground">Transparan & Sesuai Kebutuhan</span>
+              </div>
+              <div className="grid gap-2.5">
+                {getDefaultServicesForTalent(talent).map((service) => (
+                  <div
+                    key={service.id}
+                    className="p-3.5 rounded-xl border bg-card/60 hover:bg-card transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs"
+                  >
+                    <div>
+                      <div className="font-semibold text-sm flex items-center gap-1.5">
+                        <span>{service.category}</span>
+                        {service.durationHint && (
+                          <Badge variant="outline" className="text-[10px] font-normal py-0">
+                            {service.durationHint}
+                          </Badge>
+                        )}
+                      </div>
+                      {service.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{service.description}</p>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-sm font-bold text-primary">
+                        {formatRupiah(service.price)}
+                        <span className="text-xs font-normal text-muted-foreground ml-1">{service.unitLabel}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Disclaimer Biaya Tambahan */}
+              <div className="p-3 bg-amber-500/10 border border-amber-300 dark:border-amber-900/50 rounded-xl text-xs text-amber-950 dark:text-amber-200 flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <strong>Ketentuan Biaya Tambahan:</strong> {EXTRA_EXPENSES_DISCLAIMER}
+                </div>
+              </div>
+            </div>
+
+            {getMitraActivityLabels(talent.supportedActivities).length > 0 && (
+              <div>
+                <h3 className="mb-3 flex items-center gap-2 font-semibold">
+                  <Sparkles className="h-4 w-4 text-primary" /> Aktivitas yang Bisa Ditemani
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {getMitraActivityLabels(talent.supportedActivities).map((activity) => (
+                    <Badge key={activity} variant="secondary" className="px-3 py-1.5">
+                      {activity}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {talent.hobbies && (
               <div>
                 <h3 className="font-semibold mb-3 flex items-center gap-2">
-                  <Heart className="w-4 h-4 text-primary" /> Hobi & Keahlian
+                  <Heart className="w-4 h-4 text-primary" /> Hobi & Minat
                 </h3>
                 <p className="text-muted-foreground whitespace-pre-wrap">{talent.hobbies}</p>
               </div>
             )}
 
-            {!talent.hobbies && talent.skills && (
+            {talent.specialistSkills && talent.specialistSkills.length > 0 && (
               <div>
-                <h3 className="font-semibold mb-3">Keahlian</h3>
+                <h3 className="font-semibold mb-3">Keahlian Khusus</h3>
                 <div className="flex flex-wrap gap-2">
-                  {(talent.skills || []).map((skill: string) => (
+                  {talent.specialistSkills.map((skill: string) => (
                     <Badge key={skill} variant="secondary" className="px-4 py-2">
                       {skill}
                     </Badge>
                   ))}
                 </div>
               </div>
+            )}
+
+            {!talent.hobbies && (!talent.specialistSkills || talent.specialistSkills.length === 0) && talent.skills && talent.skills.length > 0 && (
+              <div>
+                <h3 className="font-semibold mb-3">Hobi & Keahlian</h3>
+                <div className="flex flex-wrap gap-2">
+                  {talent.skills.map((skill: string) => (
+                    <Badge key={skill} variant="secondary" className="px-4 py-2">
+                      {skill}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {talent.experienceLevel === "spesialis" && isSafePortfolioLink && (
+              <Card className="p-5">
+                <h3 className="font-semibold mb-3">Portofolio Keahlian</h3>
+                {isImagePortfolio && (
+                  <a href={portfolioFile} target="_blank" rel="noreferrer" className="mb-3 block overflow-hidden rounded-xl border">
+                    <img src={portfolioFile} alt={`Portofolio keahlian ${talent.name}`} className="max-h-80 w-full object-contain bg-muted" />
+                  </a>
+                )}
+                <a
+                  href={portfolioFile}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+                >
+                  Lihat portofolio / sertifikat
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </Card>
             )}
 
             {/* Bio */}
@@ -495,7 +610,7 @@ export default function TalentDetail() {
             <p className="text-sm text-muted-foreground">Mulai dari</p>
             <p className="text-xl font-bold text-primary">
               {talentPrice ? formatPrice(talentPrice) : "- -"}
-              {talentPrice && <span className="text-sm font-normal text-muted-foreground">/jam</span>}
+              {talentPrice && <span className="text-sm font-normal text-muted-foreground ml-0.5">{talentUnitLabel}</span>}
             </p>
           </div>
           <Link to={`/booking/${bookingId}`}>

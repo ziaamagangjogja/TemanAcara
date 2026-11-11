@@ -20,7 +20,9 @@ async function migrate() {
       { name: 'rejection_reason', def: 'TEXT NULL' },
       { name: 'pricing_tier', def: 'VARCHAR(50) DEFAULT "tier2"' },
       { name: 'price_accepted', def: 'TINYINT DEFAULT 0' },
-      { name: 'appeal_note', def: 'TEXT NULL' }
+      { name: 'appeal_note', def: 'TEXT NULL' },
+      { name: 'service_rates', def: 'LONGTEXT NULL' },
+      { name: 'pending_service_rates', def: 'LONGTEXT NULL' }
     ];
 
     for (const col of colsToAdd) {

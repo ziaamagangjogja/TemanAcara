@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -15,11 +15,11 @@ import {
   QrCode,
   Building2,
   Upload,
-  Star,
   Wallet,
   AlertCircle,
   AlertTriangle,
   Info,
+  Coins,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,6 +36,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { talents, bookingPurposes } from "@/data/mockData";
+import { BOOKING_PURPOSE_ACTIVITIES, getAvailableBookingPurposes, getMitraActivityLabels, inferLegacyMitraActivities, normalizeMitraActivities } from "@/data/mitraActivities";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -57,6 +58,14 @@ import {
 import { getCurrentUser, updateCurrentUser } from "@/lib/userStore";
 import { isTimeSlotBooked, isTimeSlotInPast } from '@/lib/bookingStore';
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
+import {
+  findPriceGuide,
+  calculateServiceTotal,
+  EXTRA_EXPENSES_DISCLAIMER,
+  formatRupiah,
+  getDefaultServicesForTalent,
+  type ServicePriceUnit
+} from "@/data/pricingReference";
 
 type BookingStatus = "draft" | "pending_payment" | "pending_approval" | "pending_mitra" | "approved" | "completed" | "rejected";
 
@@ -79,10 +88,28 @@ const getRandomizedAmount = (amount: number): number => {
 const offlineOnlyPurposes = [
   "Dinner / Makan Malam",
   "Traveling / Liburan",
+  "Hiking",
   "Event / Acara",
+  "Event / Wisuda atau Kelulusan",
+  "Event / Pernikahan atau Kondangan",
+  "Event / Ulang Tahun",
+  "Event / Seminar atau Konferensi",
+  "Event / Gathering atau Reuni",
+  "Event / Konser atau Festival",
+  "Event / Acara Kantor",
+  "Event / Acara Lainnya",
+  "Jasa Fotografi",
+  "Nonton Film",
   "Belanja",
   "Olahraga Bareng",
   "Pesta / Party",
+];
+
+const onlineOnlyPurposes = [
+  "Main Game Online",
+  "Nonton Bareng Online",
+  "Karaoke Online",
+  "Belajar / Diskusi",
 ];
 
 const getLocalDateInputValue = () => {
@@ -96,35 +123,6 @@ const getLocalDateInputValue = () => {
 const maskBankAccount = (accountNumber: string): string => {
   if (!accountNumber || accountNumber.length < 3) return accountNumber;
   return accountNumber;
-};
-
-const getTalentSkills = (talent: any): string[] => {
-  if (!talent) return [];
-  if (Array.isArray(talent.skills)) return talent.skills;
-  if (typeof talent.skills === "string") return talent.skills.split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean);
-  if (typeof talent.hobbies === "string") return talent.hobbies.split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean);
-  if (typeof talent.category === "string") return [talent.category];
-  return [];
-};
-
-const checkSkillMatch = (purpose: string, talentSkills: string[]): boolean => {
-  if (!talentSkills || talentSkills.length === 0) return true;
-  if (purpose === "Nongkrong / Ngobrol" || purpose === "Dinner / Makan Malam" || purpose === "Lainnya") {
-    return true; // Layanan dasar sosial platform yang universal
-  }
-  const p = purpose.toLowerCase();
-  return talentSkills.some(skill => {
-    const s = skill.toLowerCase();
-    if (s.includes("travel") || s.includes("hiking")) return p.includes("travel");
-    if (s.includes("foto") || s.includes("video") || s.includes("seni")) return p.includes("event") || p.includes("foto");
-    if (s.includes("olahraga") || s.includes("yoga") || s.includes("renang") || s.includes("basket") || s.includes("badminton") || s.includes("sepak bola")) return p.includes("olahraga");
-    if (s.includes("nonton")) return p.includes("nonton");
-    if (s.includes("belanja")) return p.includes("belanja");
-    if (s.includes("kerja") || s.includes("podcast") || s.includes("baca") || s.includes("networking")) return p.includes("kerja");
-    if (s.includes("musik") || s.includes("karaoke")) return p.includes("pesta") || p.includes("event");
-    if (s.includes("kuliner") || s.includes("kopi") || s.includes("masak")) return p.includes("dinner") || p.includes("nongkrong");
-    return p.includes(s) || s.includes(p);
-  });
 };
 
 export default function Booking() {
@@ -157,17 +155,33 @@ export default function Booking() {
   useEffect(() => {
     const loadTalents = async () => {
       try {
-        const talents = await getAllVerifiedTalents();
-        setAllTalents(talents);
+        const verifiedTalents = await getAllVerifiedTalents();
+        const talentList = Array.isArray(verifiedTalents) ? verifiedTalents : [];
+        setAllTalents(talentList);
 
-        // Cari talent berdasarkan ID
-        const foundTalent = talents.find((t) => t.id === id);
-        setDisplayTalent(foundTalent);
+        const matchTalent = (t: any) =>
+          t &&
+          (String(t.id) === String(id) ||
+           String(t.talentId) === String(id) ||
+           String(t.user_id) === String(id) ||
+           (t.email && String(t.email).toLowerCase() === String(id).toLowerCase()));
+
+        let foundTalent = talentList.find(matchTalent);
+        if (!foundTalent) {
+          foundTalent = talents.find(matchTalent);
+        }
+        setDisplayTalent(foundTalent || null);
       } catch (error) {
         console.error("Error loading talents:", error);
         // Fallback ke mock data jika gagal
-        const foundTalent = talents.find((t) => t.id === id);
-        setDisplayTalent(foundTalent);
+        const matchTalent = (t: any) =>
+          t &&
+          (String(t.id) === String(id) ||
+           String(t.talentId) === String(id) ||
+           String(t.user_id) === String(id) ||
+           (t.email && String(t.email).toLowerCase() === String(id).toLowerCase()));
+        const foundTalent = talents.find(matchTalent);
+        setDisplayTalent(foundTalent || null);
       } finally {
         setIsLoadingTalent(false);
         setIsInitialLoading(false);
@@ -192,6 +206,7 @@ export default function Booking() {
     date: "",
     time: "",
     notes: "",
+    packageOption: "paket-lokal" as "paket-lokal" | "paket-seharian",
   });
 
   // Payment states
@@ -533,32 +548,6 @@ export default function Booking() {
   // State untuk QRIS amount sesuai total harga pemesanan
   const [qrisAmount, setQrisAmount] = useState<number>(0);
 
-  // Update QRIS amount ketika displayTalent atau bookingData.duration berubah
-  useEffect(() => {
-    if (displayTalent && displayTalent.pricePerHour) {
-      const totalPrice = displayTalent.pricePerHour * bookingData.duration;
-      setQrisAmount(totalPrice);
-    }
-  }, [displayTalent, bookingData.duration]);
-
-  // 🔥 PERBAIKAN UTAMA: Ganti bagian yang menyebabkan white screen dengan loading state
-  if (isInitialLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-warm pt-16 md:pt-24 pb-8 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-muted-foreground">Memuat data...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // 🔥 PERBAIKAN: Jika tidak ada ID, redirect ke halaman talents tanpa menampilkan pesan error
-  if (!id) {
-    navigate("/talents");
-    return null;
-  }
-
   // Gunakan data dari currentBooking jika displayTalent tidak tersedia
   const talentForDisplay = displayTalent || (currentBooking ? {
     id: currentBooking.talentId,
@@ -570,33 +559,40 @@ export default function Booking() {
     rating: "0"
   } : null);
 
-  // 🔥 PERBAIKAN: Jika talent tidak ditemukan, redirect ke halaman talents tanpa menampilkan pesan error
-  if (!talentForDisplay) {
-    navigate("/talents");
-    return null;
-  }
+  // Periksa apakah user memesan akun profil sendiri
+  const activeUserSession = useMemo(() => getCurrentUserOrMitra(), []);
+  const isSelf = useMemo(() => {
+    if (!activeUserSession?.data || !talentForDisplay) return false;
+    const sessionData = activeUserSession.data;
+    const sessionId = sessionData.id || sessionData.talentId || sessionData.user_id;
+    const sessionEmail = (sessionData.email || "").trim().toLowerCase();
+    const sessionUsername = (sessionData.username || "").trim().toLowerCase();
 
-  // 🔥 CEGAH BOOKING DIRI SENDIRI: Periksa kesamaan ID, Email, atau Username
-  const activeUserSession = getCurrentUserOrMitra();
-  if (activeUserSession && talentForDisplay) {
-    const isSelf = 
-      (activeUserSession.data?.id && (talentForDisplay.id === activeUserSession.data.id || (talentForDisplay as any).talentId === activeUserSession.data.id)) ||
-      (activeUserSession.data?.email && talentForDisplay.email && activeUserSession.data.email.trim().toLowerCase() === talentForDisplay.email.trim().toLowerCase()) ||
-      (activeUserSession.data?.username && (
-        ((talentForDisplay as any).username && activeUserSession.data.username.trim().toLowerCase() === (talentForDisplay as any).username.trim().toLowerCase()) ||
-        (talentForDisplay.name && activeUserSession.data.username.trim().toLowerCase() === talentForDisplay.name.trim().toLowerCase())
-      ));
+    const talentId = talentForDisplay.id || talentForDisplay.talentId || (talentForDisplay as any).user_id;
+    const talentEmail = (talentForDisplay.email || "").trim().toLowerCase();
+    const talentUsername = ((talentForDisplay as any).username || "").trim().toLowerCase();
 
-    if (isSelf) {
+    // 1. Cek kecocokan ID akun
+    if (sessionId && talentId && String(sessionId) === String(talentId)) return true;
+
+    // 2. Cek kecocokan Email akun (jika user mendaftar sebagai mitra dengan email yang sama)
+    if (sessionEmail && talentEmail && sessionEmail === talentEmail) return true;
+
+    // 3. Cek username akun (jika kedua sisi memiliki username yang identik)
+    if (sessionUsername && talentUsername && sessionUsername === talentUsername) return true;
+
+    return false;
+  }, [activeUserSession, talentForDisplay]);
+
+  useEffect(() => {
+    if (!isInitialLoading && isSelf) {
       toast({
         title: "Pemesanan Tidak Diizinkan",
         description: "Kamu tidak bisa memesan akun profil milikmu sendiri.",
         variant: "destructive",
       });
-      navigate("/talents");
-      return null;
     }
-  }
+  }, [isInitialLoading, isSelf, toast]);
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -606,12 +602,148 @@ export default function Booking() {
     }).format(price);
   };
 
-  // Gunakan talentForDisplay untuk perhitungan harga
-  const totalPrice = talentForDisplay ? talentForDisplay.pricePerHour * bookingData.duration : 0;
+  // Deteksi layanan dan tarif aktif berdasarkan tujuan pemesanan
+  const talentServices = useMemo(() => {
+    return getDefaultServicesForTalent(talentForDisplay);
+  }, [talentForDisplay]);
+
+  const activeService = useMemo(() => {
+    if (!talentServices || talentServices.length === 0) return null;
+    const purpose = (bookingData.purpose || "").toLowerCase();
+
+    if (bookingData.type === "online") {
+      if (purpose.includes("game")) {
+        return talentServices.find((service) => service.id === "game-online") || talentServices.find((service) => service.id === "online-session") || talentServices[0];
+      }
+      return talentServices.find((service) => service.id === "online-session") || talentServices[0];
+    }
+
+    if (purpose.includes("travel") || purpose.includes("liburan") || purpose.includes("hiking")) {
+      if (bookingData.packageOption === "paket-seharian") {
+        return talentServices.find((s) => s.id === "traveling-seharian" || s.unit === "hari") || talentServices.find((s) => s.id === "traveling-lokal") || talentServices[0];
+      }
+      return talentServices.find((s) => s.id === "traveling-lokal" || s.unit === "paket") || talentServices.find((s) => s.id === "traveling-seharian") || talentServices[0];
+    }
+    if (purpose.includes("event") || purpose.includes("acara") || purpose.includes("pesta")) {
+      return talentServices.find((s) => s.id === "event" || s.unit === "acara") || talentServices[0];
+    }
+    if (purpose.includes("olahraga")) {
+      return talentServices.find((s) => s.id === "olahraga") || talentServices[0];
+    }
+    if (purpose.includes("nonton")) {
+      return talentServices.find((s) => s.id === "nonton") || talentServices[0];
+    }
+    return talentServices.find((s) => s.id === "kuliner") || talentServices[0];
+  }, [talentServices, bookingData.purpose, bookingData.packageOption, bookingData.type]);
+
+  const activeUnitRate = activeService ? activeService.price : (talentForDisplay?.pricePerHour || talentForDisplay?.price || 50000);
+  const activeUnit: ServicePriceUnit = activeService ? activeService.unit : "jam";
+  const activeUnitLabel = activeService ? activeService.unitLabel : "/ jam";
+  const rawSupportedActivities = displayTalent?.supportedActivities ?? displayTalent?.supported_activities;
+  const supportedActivityIds = rawSupportedActivities != null
+    ? normalizeMitraActivities(rawSupportedActivities)
+    : inferLegacyMitraActivities(
+        displayTalent?.category,
+        displayTalent?.skills,
+        displayTalent?.hobbies,
+        displayTalent?.specialistSkills,
+        displayTalent?.description,
+        displayTalent?.bio,
+      );
+  const supportedActivityLabels = getMitraActivityLabels(supportedActivityIds);
+  const purposesForMeetingType = bookingData.type === "online"
+    ? [...bookingPurposes.filter((purpose) => !offlineOnlyPurposes.includes(purpose)), ...onlineOnlyPurposes]
+    : bookingPurposes;
+  const availableBookingPurposes = getAvailableBookingPurposes(
+    supportedActivityIds,
+    purposesForMeetingType,
+  );
+  const eventPurposes = availableBookingPurposes.filter((purpose) => purpose.startsWith("Event /") && purpose !== "Event / Acara");
+  const nonEventPurposes = availableBookingPurposes.filter((purpose) => !purpose.startsWith("Event /") && purpose !== "Pesta / Party");
+  const eventActivityPurposes = purposesForMeetingType.filter((purpose) =>
+    purpose.startsWith("Event /") && purpose !== "Event / Acara" &&
+    (BOOKING_PURPOSE_ACTIVITIES[purpose] || []).some((activityId) => supportedActivityIds.includes(activityId)),
+  );
+  const isCustomPurpose = bookingData.purpose.startsWith("Lainnya:") || bookingData.purpose.startsWith("Event lainnya:") || bookingData.purpose.startsWith("Event / Acara Lainnya:");
+  const isEventSelected = bookingData.purpose === "Event / Acara" || eventPurposes.includes(bookingData.purpose) || bookingData.purpose.startsWith("Event / Acara Lainnya:");
+  const hasSupportedActivities = supportedActivityIds.length > 0;
+
+  // Perhitungan total harga sesuai rumus: Tarif Satuan × Durasi/Kuantitas
+  const totalPrice = calculateServiceTotal(activeUnitRate, activeUnit, bookingData.duration);
   const displayAmount = totalPrice;
+
+  useEffect(() => {
+    if (totalPrice > 0) {
+      setQrisAmount(totalPrice);
+    }
+  }, [totalPrice]);
 
   // True jika saldo dompet user kurang dari total pembayaran.
   const saldoInsufficient = walletBalance < totalPrice;
+
+  // Render loading state secara aman setelah semua hook terpanggil
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-warm pt-16 md:pt-24 pb-8 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
+          <p className="text-muted-foreground">Memuat data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSelf) {
+    return (
+      <div className="min-h-screen bg-gradient-warm pt-20 md:pt-28 pb-12 px-4 flex items-center justify-center">
+        <Card className="max-w-md w-full p-8 text-center space-y-5 shadow-lg border-primary/20">
+          <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-950/50 text-amber-600 flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-foreground">Pemesanan Tidak Diizinkan</h2>
+            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+              Kamu sedang membuka halaman pemesanan untuk profil akunmu sendiri. Pengguna atau mitra tidak dapat memesan layanannya sendiri.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
+            <Button variant="hero" onClick={() => navigate("/talents")}>
+              Cari Teman Lain
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/")}>
+              Ke Beranda
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!id || !talentForDisplay) {
+    return (
+      <div className="min-h-screen bg-gradient-warm pt-20 md:pt-28 pb-12 px-4 flex items-center justify-center">
+        <Card className="max-w-md w-full p-8 text-center space-y-5 shadow-lg border-dashed">
+          <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-950/50 text-red-600 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-foreground">Mitra Tidak Ditemukan</h2>
+            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+              Data mitra yang ingin kamu pesan tidak ditemukan atau layanannya sedang tidak aktif. Silakan pilih mitra lain di halaman Cari Teman.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
+            <Button variant="hero" onClick={() => navigate("/talents")}>
+              Cari Teman Aktivitas
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/")}>
+              Ke Beranda
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   const handleNext = () => {
     if (bookingStatus !== "draft") return;
@@ -636,12 +768,13 @@ export default function Booking() {
         });
         return;
       }
-      if (isTimeSlotExceedingOperatingHours(bookingData.time, bookingData.duration)) {
-        const details = getBookingTimeDetails(bookingData.time, bookingData.duration);
-        const latestStart = getLatestStartTimeForDuration(bookingData.duration);
+      const effectiveHours = activeUnit === "hari" ? 8 : activeUnit === "paket" ? 6 : activeUnit === "acara" ? 4 : bookingData.duration;
+      if (isTimeSlotExceedingOperatingHours(bookingData.time, effectiveHours)) {
+        const details = getBookingTimeDetails(bookingData.time, effectiveHours);
+        const latestStart = getLatestStartTimeForDuration(effectiveHours);
         toast({
           title: "Waktu Tidak Mencukupi",
-          description: `Pemesanan ${bookingData.duration} jam mulai pukul ${bookingData.time} akan selesai pukul ${details.formattedEndTime} WIB (melebihi jam operasional mitra 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
+          description: `Pemesanan mulai pukul ${bookingData.time} akan selesai pukul ${details.formattedEndTime} WIB (melebihi jam operasional mitra 22:00 WIB). Batas waktu mulai maksimal adalah pukul ${latestStart} WIB.`,
           variant: "destructive",
         });
         return;
@@ -963,13 +1096,11 @@ const handleConfirmPayment = async () => {
     switch (step) {
       case 1:
         // Validasi tujuan pemesanan
-        if (bookingData.purpose.startsWith("Lainnya:")) {
-          // Jika "Lainnya" dipilih, pastikan ada teks kustom
+        if (isCustomPurpose) {
           return bookingData.duration > 0 && customPurpose.trim().length > 0;
-        } else {
-          // Jika opsi lain dipilih, pastikan tujuan tidak kosong
-          return bookingData.duration > 0 && bookingData.purpose.trim().length > 0;
         }
+        if (bookingData.purpose === "Event / Acara") return false;
+        return bookingData.duration > 0 && bookingData.purpose.trim().length > 0;
       case 2:
         return (
           Boolean(bookingData.date) &&
@@ -1004,7 +1135,7 @@ const handleConfirmPayment = async () => {
 
   return (
     <div className="min-h-screen bg-gradient-warm pt-16 md:pt-24 pb-8">
-      <div className="container max-w-4xl">
+      <div className="container max-w-6xl px-4 sm:px-6">
         {/* Header */}
         <div className="flex items-center gap-4 mb-6">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
@@ -1085,146 +1216,13 @@ const handleConfirmPayment = async () => {
           })}
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px] xl:gap-8">
           {/* Form Section */}
-          <div className="md:col-span-2">
-            <Card className="p-6">
+          <div className="min-w-0">
+            <Card className="p-4 sm:p-6">
               {step === 1 && bookingStatus === "draft" && (
                 <div className="space-y-6 animate-fade-in">
                   <h2 className="text-xl font-bold">Detail Pemesanan</h2>
-
-                  {/* Duration */}
-                  <div>
-                    <label className="text-sm font-medium mb-3 block">
-                      Durasi (jam)
-                    </label>
-                    <div className="flex gap-2">
-                      {[1, 2, 3, 4, 5, 6].map((h) => (
-                        <Button
-                          key={h}
-                          variant={bookingData.duration === h ? "default" : "outline"}
-                          size="sm"
-                          onClick={() =>
-                            setBookingData({ ...bookingData, duration: h })
-                          }
-                        >
-                          {h} jam
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Purpose */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium">
-                        Tujuan Pemesanan
-                      </label>
-                      <span className="text-xs text-muted-foreground">
-                        Sesuaikan dengan keahlian mitra
-                      </span>
-                    </div>
-
-                    {/* Banner Info Keahlian Talent */}
-                    {displayTalent && (
-                      <div className="mb-3 p-2.5 bg-orange-50/70 rounded-xl border border-orange-200/80 text-xs text-orange-950">
-                        <div className="flex items-center gap-1.5 font-semibold text-orange-900 mb-1">
-                          <Star className="w-3.5 h-3.5 text-orange-600 fill-orange-600 shrink-0" />
-                          <span>Keahlian & Layanan {displayTalent.name}:</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {getTalentSkills(displayTalent).length > 0 ? (
-                            getTalentSkills(displayTalent).map((skill) => (
-                              <Badge
-                                key={skill}
-                                variant="secondary"
-                                className="text-[10px] bg-white border border-orange-200 text-orange-800 font-medium"
-                              >
-                                {skill}
-                              </Badge>
-                            ))
-                          ) : (
-                            <Badge variant="secondary" className="text-[10px] bg-white border border-orange-200 text-orange-800">
-                              Teman Acara & Kasual
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
-                      {bookingPurposes.map((purpose) => {
-                        const isOfflineOnly = offlineOnlyPurposes.includes(purpose);
-                        const isDisabled = bookingData.type === "online" && isOfflineOnly;
-                        const isMatched = checkSkillMatch(purpose, getTalentSkills(displayTalent));
-                        const isSelected =
-                          (bookingData.purpose === purpose && purpose !== "Lainnya") ||
-                          (purpose === "Lainnya" && bookingData.purpose.startsWith("Lainnya:"));
-
-                        return (
-                          <Button
-                            key={purpose}
-                            variant={isSelected ? "default" : "outline"}
-                            size="sm"
-                            disabled={isDisabled}
-                            className={cn(
-                              "justify-start h-auto py-2 px-2.5 text-xs flex flex-col items-start gap-0.5",
-                              isDisabled && "opacity-50 cursor-not-allowed bg-muted",
-                              !isSelected && isMatched && purpose !== "Lainnya" && "border-orange-200/90 bg-orange-50/30 hover:bg-orange-50"
-                            )}
-                            onClick={() => {
-                              if (isDisabled) return;
-                              if (purpose === "Lainnya") {
-                                setBookingData({ ...bookingData, purpose: "Lainnya:" });
-                              } else {
-                                setBookingData({ ...bookingData, purpose });
-                                setCustomPurpose(""); // Reset custom purpose when selecting predefined option
-                              }
-                            }}
-                          >
-                            <span className="font-medium truncate w-full text-left">{purpose}</span>
-                            {isMatched && purpose !== "Nongkrong / Ngobrol" && purpose !== "Dinner / Makan Malam" && purpose !== "Lainnya" && (
-                              <span className={cn(
-                                "text-[9px] px-1 py-0 rounded font-semibold",
-                                isSelected ? "text-orange-100 bg-orange-700/60" : "text-orange-600 bg-orange-100/80"
-                              )}>
-                                ★ Keahlian Mitra
-                              </span>
-                            )}
-                          </Button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Notifikasi jika memilih di luar keahlian */}
-                    {bookingData.purpose &&
-                      bookingData.purpose !== "Lainnya:" &&
-                      !checkSkillMatch(bookingData.purpose, getTalentSkills(displayTalent)) && (
-                        <div className="mt-2.5 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
-                          <span className="text-sm shrink-0">💡</span>
-                          <span className="leading-tight">
-                            <strong>Catatan:</strong> "{bookingData.purpose}" di luar spesialisasi utama {displayTalent?.name || "mitra"}. Anda tetap bisa melanjutkan, namun pastikan untuk mendiskusikan kesiapan acara melalui chat.
-                          </span>
-                        </div>
-                      )}
-
-                    {/* Tampilkan input teks jika "Lainnya" dipilih */}
-                    {bookingData.purpose.startsWith("Lainnya:") && (
-                      <div className="mt-3">
-                        <Input
-                          placeholder="Tuliskan tujuan pemesanan Anda..."
-                          value={customPurpose}
-                          onChange={(e) => {
-                            setCustomPurpose(e.target.value);
-                            setBookingData({
-                              ...bookingData,
-                              purpose: `Lainnya: ${e.target.value}`
-                            });
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
 
                   {/* Type */}
                   <div>
@@ -1240,7 +1238,11 @@ const handleConfirmPayment = async () => {
                             "border-primary ring-2 ring-primary/20"
                         )}
                         onClick={() =>
-                          setBookingData({ ...bookingData, type: "offline" })
+                          setBookingData({
+                            ...bookingData,
+                            type: "offline",
+                            purpose: onlineOnlyPurposes.includes(bookingData.purpose) ? "" : bookingData.purpose,
+                          })
                         }
                       >
                         <Users className="w-8 h-8 mx-auto mb-2 text-primary" />
@@ -1256,14 +1258,13 @@ const handleConfirmPayment = async () => {
                           bookingData.type === "online" &&
                             "border-primary ring-2 ring-primary/20"
                         )}
-                        onClick={() => {
-                          const isInvalid = offlineOnlyPurposes.includes(bookingData.purpose);
+                        onClick={() =>
                           setBookingData({
                             ...bookingData,
                             type: "online",
-                            purpose: isInvalid ? "" : bookingData.purpose
-                          });
-                        }}
+                            purpose: offlineOnlyPurposes.includes(bookingData.purpose) ? "" : bookingData.purpose,
+                          })
+                        }
                       >
                         <Video className="w-8 h-8 mx-auto mb-2 text-primary" />
                         <h4 className="font-semibold">Online</h4>
@@ -1271,6 +1272,223 @@ const handleConfirmPayment = async () => {
                           Video call
                         </p>
                       </Card>
+                    </div>
+                  </div>
+
+                  {/* Purpose */}
+                  <div>
+                    <div className="mb-3">
+                      <label className="text-sm font-semibold block">
+                        Tujuan Pemesanan / Aktivitas
+                      </label>
+                      <span className="text-xs text-muted-foreground">
+                        {bookingData.type === "online"
+                          ? "Pilih aktivitas yang bisa dilakukan secara online"
+                          : "Pilih aktivitas yang dilakukan dengan bertemu langsung"}
+                      </span>
+                    </div>
+
+                    {!hasSupportedActivities && (
+                      <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                        {displayTalent?.name || "Mitra ini"} belum memperbarui daftar aktivitas layanannya.
+                      </p>
+                    )}
+
+                    {hasSupportedActivities && availableBookingPurposes.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {nonEventPurposes.map((purpose) => {
+                          const isSelected = purpose === "Lainnya" ? bookingData.purpose.startsWith("Lainnya:") : bookingData.purpose === purpose;
+                          return <Button key={purpose} type="button" variant={isSelected ? "default" : "outline"} size="sm" className={cn("h-11 justify-start whitespace-normal text-left", !isSelected && "border-orange-200 bg-orange-50/30 hover:bg-orange-50")} onClick={() => {
+                            if (purpose === "Lainnya") {
+                              setBookingData({ ...bookingData, purpose: "Lainnya:", duration: 2 });
+                              setCustomPurpose("");
+                            } else {
+                              const isTravel = purpose.includes("Traveling") || purpose.includes("Hiking");
+                              setBookingData({ ...bookingData, purpose, duration: isTravel ? 1 : 2, packageOption: isTravel ? "paket-lokal" : undefined });
+                              setCustomPurpose("");
+                            }
+                          }}>{purpose}</Button>;
+                        })}
+                        {eventPurposes.length > 0 && (
+                          <Button type="button" variant={isEventSelected ? "default" : "outline"} size="sm" className={cn("h-11 justify-start whitespace-normal text-left", !isEventSelected && "border-orange-200 bg-orange-50/30 hover:bg-orange-50")} onClick={() => {
+                            setBookingData({ ...bookingData, purpose: isEventSelected ? "" : "Event / Acara", duration: 1 });
+                            setCustomPurpose("");
+                          }}>Event / Acara</Button>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">Mitra belum menyediakan aktivitas untuk metode pertemuan ini.</p>
+                    )}
+                    {isEventSelected && (
+                      <div className="mt-3 space-y-3 rounded-xl border border-orange-200 bg-orange-50/40 p-4">
+                        <div>
+                          <p className="text-sm font-semibold">Pilih jenis acara</p>
+                          <p className="text-xs text-muted-foreground">Pilih acara yang sesuai dengan kegiatan dan keahlian mitra.</p>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {eventActivityPurposes.map((purpose) => {
+                            const isOtherEvent = purpose === "Event / Acara Lainnya";
+                            const isSelected = isOtherEvent ? bookingData.purpose.startsWith("Event / Acara Lainnya:") : bookingData.purpose === purpose;
+                            return (
+                              <Button key={purpose} type="button" variant={isSelected ? "default" : "outline"} size="sm" className={cn("h-11 justify-start whitespace-normal text-left", !isSelected && "border-orange-200 bg-white hover:bg-orange-50")} onClick={() => {
+                                setBookingData({ ...bookingData, purpose: isOtherEvent ? "Event / Acara Lainnya:" : purpose, duration: 1 });
+                                setCustomPurpose("");
+                              }}>{purpose === "Event / Acara Lainnya" ? "Acara lainnya" : purpose.replace("Event / ", "")}</Button>
+                            );
+                          })}
+                        </div>
+                        {bookingData.purpose.startsWith("Event / Acara Lainnya:") && (
+                          <div className="space-y-1.5">
+                            <label htmlFor="custom-event-purpose" className="text-sm font-medium">Tulis acara kamu</label>
+                            <Input id="custom-event-purpose" placeholder="Contoh: acara tunangan, bukber..." value={customPurpose} onChange={(e) => {
+                              setCustomPurpose(e.target.value);
+                              setBookingData({ ...bookingData, purpose: `Event / Acara Lainnya: ${e.target.value}` });
+                            }} />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {bookingData.purpose.startsWith("Lainnya:") && (
+                      <div className="mt-3 space-y-1.5">
+                        <label htmlFor="custom-activity-purpose" className="text-sm font-medium">Tuliskan aktivitas</label>
+                        <Input id="custom-activity-purpose" placeholder="Tuliskan tujuan pemesanan..." value={customPurpose} onChange={(e) => {
+                          setCustomPurpose(e.target.value);
+                          setBookingData({ ...bookingData, purpose: `Lainnya: ${e.target.value}` });
+                        }} />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dynamic Duration / Package Selection based on Purpose */}
+                  <div>
+                    {bookingData.purpose.includes("Traveling") || bookingData.purpose.includes("Hiking") ? (
+                      <div className="space-y-3">
+                        <label className="text-sm font-medium block">
+                          Pilihan Paket Wisata
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            variant={bookingData.packageOption === "paket-lokal" ? "default" : "outline"}
+                            className="h-auto py-2.5 px-3 flex flex-col items-start text-left"
+                            onClick={() =>
+                              setBookingData({ ...bookingData, packageOption: "paket-lokal", duration: 1 })
+                            }
+                          >
+                            <span className="font-semibold text-xs">Paket Lokal (4–8 jam)</span>
+                            <span className="text-[10px] opacity-80 mt-0.5">Eksplorasi spot kota / setengah hari</span>
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant={bookingData.packageOption === "paket-seharian" ? "default" : "outline"}
+                            className="h-auto py-2.5 px-3 flex flex-col items-start text-left"
+                            onClick={() =>
+                              setBookingData({ ...bookingData, packageOption: "paket-seharian", duration: 1 })
+                            }
+                          >
+                            <span className="font-semibold text-xs">Paket Seharian (Maks. 8 jam/hari)</span>
+                            <span className="text-[10px] opacity-80 mt-0.5">Keliling wisata seharian</span>
+                          </Button>
+                        </div>
+
+                        {bookingData.packageOption === "paket-seharian" && (
+                          <div className="pt-2">
+                            <label className="text-xs font-medium mb-1.5 block">Jumlah Hari Layanan:</label>
+                            <div className="flex gap-2">
+                              {[1, 2, 3].map((d) => (
+                                <Button
+                                  key={d}
+                                  type="button"
+                                  variant={bookingData.duration === d ? "default" : "outline"}
+                                  size="sm"
+                                  onClick={() => setBookingData({ ...bookingData, duration: d })}
+                                >
+                                  {d} Hari
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="p-2.5 rounded-lg bg-muted/60 border text-[11px] text-muted-foreground leading-relaxed">
+                          ⚠️ <strong>Batas Durasi Layanan:</strong> Paket harian dibatasi maksimal 8 jam layanan aktif per hari (bukan 24 jam non-stop) demi keamanan dan kenyamanan bersama.
+                        </div>
+                      </div>
+                    ) : bookingData.purpose.includes("Event") || bookingData.purpose.includes("Pesta") ? (
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium block">
+                          Durasi Layanan Event
+                        </label>
+                        <div className="p-3 bg-muted/40 rounded-xl border flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-semibold">Paket Pendamping Acara (1 Sesi)</span>
+                            <p className="text-muted-foreground text-[11px]">Tarif flat pendamping kondangan, gathering, wisuda, atau pesta.</p>
+                          </div>
+                          <Badge variant="secondary" className="font-bold">1 Acara</Badge>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="text-sm font-medium mb-3 block">
+                          Durasi Layanan (jam)
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {[1, 2, 3, 4, 5, 6].map((h) => (
+                            <Button
+                              key={h}
+                              variant={bookingData.duration === h ? "default" : "outline"}
+                              size="sm"
+                              onClick={() =>
+                                setBookingData({ ...bookingData, duration: h })
+                              }
+                            >
+                              {h} jam
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Transparansi Rincian Biaya & Klausul Biaya Tambahan */}
+                  <div className="p-4 rounded-xl bg-orange-50/60 dark:bg-orange-950/20 border border-orange-200/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-orange-950 dark:text-orange-200 flex items-center gap-1.5">
+                        <Coins className="w-4 h-4 text-orange-500" />
+                        Rincian Perhitungan Biaya Jasa Mitra
+                      </span>
+                      <Badge variant="outline" className="text-[10px] bg-white border-orange-200 text-orange-800">
+                        Transparan & Jelas
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <div className="p-2.5 rounded-lg bg-background/80 border border-orange-200/50">
+                        <span className="text-muted-foreground block text-[11px]">Tarif Satuan Layanan:</span>
+                        <span className="font-bold text-foreground text-sm">
+                          {formatPrice(activeUnitRate)} <span className="text-xs font-normal text-muted-foreground">{activeUnitLabel}</span>
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-background/80 border border-orange-200/50">
+                        <span className="text-muted-foreground block text-[11px]">Durasi / Kuantitas:</span>
+                        <span className="font-bold text-foreground text-sm">
+                          {bookingData.duration} {activeUnit}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-orange-100/70 dark:bg-orange-900/40 border border-orange-300 dark:border-orange-800 flex items-center justify-between text-xs">
+                      <span className="font-medium text-orange-950 dark:text-orange-200">
+                        Perhitungan: <strong className="font-bold">{formatPrice(activeUnitRate)} × {bookingData.duration} {activeUnit}</strong>
+                      </span>
+                      <span className="text-base font-extrabold text-orange-600 dark:text-orange-400">
+                        = {formatPrice(totalPrice)}
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-orange-900 dark:text-orange-300 leading-relaxed bg-background/70 p-2.5 rounded-lg border border-orange-200/60">
+                      <strong>⚠️ Biaya Tambahan:</strong> {EXTRA_EXPENSES_DISCLAIMER}
                     </div>
                   </div>
 
@@ -1301,7 +1519,7 @@ const handleConfirmPayment = async () => {
                       <p className="font-semibold text-sm">Ketentuan Jam Operasional (08:00 – 22:00 WIB)</p>
                       <p className="leading-relaxed">
                         Layanan mitra beroperasi mulai pukul <strong className="font-semibold">08:00 WIB</strong> hingga maksimal selesai pukul <strong className="font-semibold">22:00 WIB</strong>.
-                        Untuk durasi <strong className="font-semibold">{bookingData.duration} jam</strong>, batas waktu mulai maksimal adalah pukul <strong className="font-semibold underline text-primary">{getLatestStartTimeForDuration(bookingData.duration)} WIB</strong> agar layanan selesai tepat waktu sebelum jam operasional berakhir.
+                        Untuk layanan ini (<strong className="font-semibold">{bookingData.duration} {activeUnit}</strong>), batas waktu mulai maksimal adalah pukul <strong className="font-semibold underline text-primary">{getLatestStartTimeForDuration(activeUnit === "hari" ? 8 : activeUnit === "paket" ? 6 : activeUnit === "acara" ? 4 : bookingData.duration)} WIB</strong> agar layanan selesai tepat waktu sebelum jam operasional berakhir.
                       </p>
                     </div>
                   </div>
@@ -1487,15 +1705,15 @@ const handleConfirmPayment = async () => {
 
                   <div className="space-y-4">
                     <div className="flex justify-between py-3 border-b">
-                      <span className="text-muted-foreground">Durasi</span>
-                      <span className="font-medium">{bookingData.duration} jam</span>
+                      <span className="text-muted-foreground">Durasi / Kuantitas</span>
+                      <span className="font-medium">{bookingData.duration} {activeUnit}</span>
                     </div>
                     <div className="flex justify-between py-3 border-b">
                       <span className="text-muted-foreground">Tujuan</span>
                       <span className="font-medium">
-                        {bookingData.purpose.startsWith("Lainnya:")
+                        {isCustomPurpose
                           ? customPurpose || bookingData.purpose
-                          : bookingData.purpose}
+                          : bookingData.purpose.replace("Event / ", "")}
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b">
@@ -1514,19 +1732,31 @@ const handleConfirmPayment = async () => {
                         })}
                         <br />
                         <span className="text-sm text-primary font-semibold">
-                          {bookingData.time} – {getBookingTimeDetails(bookingData.time, bookingData.duration).formattedEndTime} WIB ({bookingData.duration} jam)
+                          {bookingData.time} – {getBookingTimeDetails(bookingData.time, bookingData.duration).formattedEndTime} WIB ({bookingData.duration} {activeUnit})
                         </span>
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b">
-                      <span className="text-muted-foreground">Harga per jam</span>
+                      <span className="text-muted-foreground">Tarif Satuan Layanan</span>
                       <span className="font-medium">
-                        {formatPrice(talentForDisplay.pricePerHour)}
+                        {formatPrice(activeUnitRate)} {activeUnitLabel}
                       </span>
                     </div>
+                    <div className="p-3 rounded-xl bg-orange-50/70 dark:bg-orange-950/20 border border-orange-200/60 text-xs">
+                      <div className="text-muted-foreground">Rincian Perhitungan Biaya:</div>
+                      <div className="font-bold text-orange-950 dark:text-orange-200 text-sm mt-0.5">
+                        {formatPrice(activeUnitRate)} × {bookingData.duration} {activeUnit} = {formatPrice(totalPrice)}
+                      </div>
+                    </div>
                     <div className="flex justify-between py-3 text-lg font-bold">
-                      <span>Total</span>
+                      <span>Total Biaya Jasa Mitra</span>
                       <span className="text-primary">{formatPrice(totalPrice)}</span>
+                    </div>
+                    <div className="p-3 bg-amber-500/10 border border-amber-300 dark:border-amber-900/50 rounded-xl text-xs text-amber-950 dark:text-amber-200 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="leading-relaxed">
+                        <strong>Ketentuan Biaya Aktivitas:</strong> {EXTRA_EXPENSES_DISCLAIMER}
+                      </div>
                     </div>
                   </div>
 
@@ -1549,7 +1779,12 @@ const handleConfirmPayment = async () => {
                   {/* Payment Summary */}
                   <Card className="p-4 bg-muted/50">
                     <div className="flex justify-between items-center">
-                      <span className="text-muted-foreground">Total Pembayaran</span>
+                      <div>
+                        <span className="text-muted-foreground block text-sm">Total Pembayaran</span>
+                        <span className="text-xs text-muted-foreground font-medium">
+                          {formatPrice(activeUnitRate)} × {bookingData.duration} {activeUnit}
+                        </span>
+                      </div>
                       <span className="text-2xl font-bold text-primary">{formatPrice(totalPrice)}</span>
                     </div>
                     {paymentCode && (
@@ -1925,9 +2160,9 @@ const handleConfirmPayment = async () => {
                       <div>
                         <p className="font-semibold">{talentForDisplay.name}</p>
                         <p className="text-sm text-muted-foreground">
-                          {bookingData.purpose.startsWith("Lainnya:")
+                          {isCustomPurpose
                             ? customPurpose || bookingData.purpose
-                            : bookingData.purpose}
+                            : bookingData.purpose.replace("Event / ", "")}
                         </p>
                       </div>
                     </div>
@@ -2039,23 +2274,23 @@ const handleConfirmPayment = async () => {
           </div>
 
           {/* Talent Summary */}
-          <div className="hidden md:block">
-            <Card className="p-5 sticky top-24">
-              <div className="flex gap-4 mb-4">
+          <aside className="hidden lg:block min-w-0">
+            <Card className="p-5 sticky top-24 overflow-hidden">
+              <div className="flex items-start gap-3 mb-4">
                 <img
                   src={talentForDisplay.photo}
                   alt={talentForDisplay.name}
-                  className="w-20 h-20 rounded-xl object-cover"
+                  className="w-16 h-16 shrink-0 rounded-xl object-cover"
                 />
-                <div>
-                  <h3 className="font-bold">{talentForDisplay.name}</h3>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold leading-snug break-words">{talentForDisplay.name}</h3>
                   <div className="flex items-center gap-1 text-sm text-muted-foreground">
                     <MapPin className="w-3 h-3" />
                     {talentForDisplay.city}
                   </div>
-                  <div className="flex gap-1 mt-2">
+                  <div className="flex flex-wrap gap-1 mt-2">
                     {talentForDisplay.skills?.slice(0, 2).map((skill: string) => (
-                      <Badge key={skill} variant="secondary" className="text-xs">
+                      <Badge key={skill} variant="secondary" className="max-w-full text-[10px] whitespace-normal">
                         {skill}
                       </Badge>
                     ))}
@@ -2064,19 +2299,34 @@ const handleConfirmPayment = async () => {
               </div>
 
               <div className="border-t pt-4 space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Harga per jam</span>
+                {bookingData.purpose && (
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-[11px] text-muted-foreground">Aktivitas dipilih</p>
+                    <p className="text-sm font-medium break-words">{isCustomPurpose ? customPurpose || bookingData.purpose.replace(/^(Event \/ Acara Lainnya:|Event lainnya:|Lainnya:)\s*/, "") || "Acara lainnya" : bookingData.purpose.replace("Event / ", "")}</p>
+                  </div>
+                )}
+                <div className="flex justify-between gap-2 text-sm">
+                  <span className="text-muted-foreground">Tarif Satuan</span>
                   <span className="font-medium">
-                    {formatPrice(talentForDisplay.pricePerHour)}
+                    {formatPrice(activeUnitRate)} {activeUnitLabel}
                   </span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Durasi</span>
-                  <span className="font-medium">{bookingData.duration} jam</span>
+                <div className="flex justify-between gap-2 text-sm">
+                  <span className="text-muted-foreground">Kuantitas / Durasi</span>
+                  <span className="font-medium">{bookingData.duration} {activeUnit}</span>
                 </div>
-                <div className="flex justify-between font-bold pt-3 border-t">
-                  <span>Total</span>
-                  <span className="text-primary">{formatPrice(totalPrice)}</span>
+                <div className="rounded-xl bg-orange-50/70 dark:bg-orange-950/20 border border-orange-200/60 p-3 text-xs">
+                  <div className="text-[11px] text-muted-foreground">Rincian Perhitungan</div>
+                  <div className="font-bold text-orange-950 dark:text-orange-200 mt-0.5 break-words">
+                    {formatPrice(activeUnitRate)} × {bookingData.duration} {activeUnit} = {formatPrice(totalPrice)}
+                  </div>
+                </div>
+                <div className="flex items-start justify-between gap-3 font-bold pt-3 border-t">
+                  <span>Total Biaya</span>
+                  <span className="text-primary text-lg text-right leading-tight">{formatPrice(totalPrice)}</span>
+                </div>
+                <div className="text-[10px] text-muted-foreground leading-tight pt-1">
+                  * Biaya makan, tiket masuk, transportasi, atau akomodasi tidak termasuk dan disepakati terpisah.
                 </div>
               </div>
 
@@ -2100,7 +2350,7 @@ const handleConfirmPayment = async () => {
                 </ol>
               </div>
             </Card>
-          </div>
+          </aside>
         </div>
       </div>
 

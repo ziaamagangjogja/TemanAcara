@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Home, Users, Calendar, MessageCircle, User, Menu, X, Heart, HeartHandshake, Bell, LogOut, Clock, CheckCircle2, LayoutDashboard } from "lucide-react";
+import { Home, Users, UserSearch, Calendar, MessageCircle, User, Menu, X, Heart, HeartHandshake, Bell, LogOut, Clock, CheckCircle2, LayoutDashboard, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -21,8 +21,8 @@ import { useAppSettings } from "@/contexts/AppSettingsContext";
 
 const userNavItems = [
   { label: "Beranda", path: "/", icon: Home, requiresAuth: false },
-  { label: "Teman", path: "/talents", icon: Users, requiresAuth: false },
-  { label: "Pemesanan", path: "/bookings", icon: Calendar, requiresAuth: true },
+  { label: "Cari Teman", path: "/talents", icon: UserSearch, requiresAuth: false },
+  { label: "Pesanan", path: "/bookings", icon: Calendar, requiresAuth: true },
   { label: "Percakapan", path: "/chat", icon: MessageCircle, requiresAuth: true },
   { label: "Profil", path: "/profile", icon: User, requiresAuth: true },
 ];
@@ -123,6 +123,23 @@ export function Navbar() {
     setIsLogoutDialogOpen(true);
   };
 
+  const handleBack = () => {
+    if (location.key !== "default") {
+      navigate(-1);
+      return;
+    }
+
+    if (location.pathname.startsWith("/chat/")) {
+      navigate("/chat");
+    } else if (location.pathname.startsWith("/booking/")) {
+      navigate("/bookings");
+    } else if (location.pathname.startsWith("/talent/")) {
+      navigate("/talents");
+    } else {
+      navigate("/");
+    }
+  };
+
   const confirmLogout = () => {
     localStorage.removeItem("rentmate_current_username");
     localStorage.removeItem("rentmate_current_user");
@@ -139,16 +156,23 @@ export function Navbar() {
 
   return (
     <>
-      <nav className="hidden md:flex fixed top-0 left-0 right-0 z-50 bg-[#FFF7F0]/90 backdrop-blur-md border-b border-orange-200/50 shadow-sm">
-        <div className="container flex items-center justify-between h-16">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-gradient-hero rounded-xl flex items-center justify-center shadow-orange">
-              <span className="text-primary-foreground font-bold text-lg">R</span>
-            </div>
-            <span className="font-bold text-xl text-foreground">RentMate</span>
-          </Link>
+      <nav className="fixed inset-x-0 top-0 z-50 hidden border-b border-orange-200/50 bg-[#FFF7F0]/90 shadow-sm backdrop-blur-md md:flex">
+        <div className="container mx-auto grid h-16 w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-4 sm:px-6">
+          <div className="flex min-w-0 items-center">
+            <Link to="/" className="flex shrink-0 items-center gap-2">
+              <div className="w-10 h-10 bg-gradient-hero rounded-xl flex items-center justify-center shadow-orange">
+                <span className="text-primary-foreground font-bold text-lg">R</span>
+              </div>
+              <span className="font-bold text-xl text-foreground">RentMate</span>
+            </Link>
+          </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center justify-center gap-1">
+            {location.pathname !== "/" && (
+              <Button variant="ghost" size="icon" onClick={handleBack} aria-label="Kembali">
+                <ArrowLeft className="w-5 h-5" />
+              </Button>
+            )}
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
@@ -179,7 +203,7 @@ export function Navbar() {
             })}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center justify-end gap-2">
             {displayUser && !isAuthPage && (
               <Link to="/profile?tab=notifications" aria-label="Notifikasi" className="relative">
                 <Button variant="ghost" size="icon" className="relative">
@@ -242,14 +266,24 @@ export function Navbar() {
         </div>
       </nav>
 
-      <nav className="md:hidden fixed top-0 left-0 right-0 z-50 bg-[#FFF7F0]/90 backdrop-blur-md border-b border-orange-200/50 shadow-sm">
-        <div className="flex items-center justify-between h-14 px-4">
-          <Link to="/" className="flex items-center gap-2">
+      <nav className="fixed inset-x-0 top-0 z-50 border-b border-orange-200/50 bg-[#FFF7F0]/90 shadow-sm backdrop-blur-md md:hidden">
+        <div className="mx-auto grid h-14 w-full max-w-screen-2xl grid-cols-[1fr_auto_1fr] items-center px-4">
+          <div className="flex min-w-0 items-center">
+            {location.pathname !== "/" && (
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={handleBack} aria-label="Kembali">
+                <ArrowLeft className="w-5 h-5" />
+              </Button>
+            )}
+          </div>
+          <Link to="/" className="flex items-center gap-2 justify-self-center">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-hero text-sm font-bold text-primary-foreground shadow-orange">R</span>
             <span className="font-bold text-lg text-foreground">RentMate</span>
           </Link>
-          <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </Button>
+          <div className="flex justify-self-end">
+            <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </Button>
+          </div>
         </div>
 
         {mobileMenuOpen && (
@@ -349,9 +383,16 @@ export function Navbar() {
               <Link
                 key={item.path}
                 to={item.path}
-                className={cn("flex flex-col items-center gap-1 p-2 rounded-xl transition-colors min-w-[60px]", isActive ? "text-primary" : "text-muted-foreground")}
+                className={cn("flex flex-col items-center gap-1 p-2 rounded-xl transition-colors min-w-[60px]", isActive ? "text-primary font-semibold" : "text-muted-foreground")}
               >
-                <Icon className="w-5 h-5" />
+                <span className="relative">
+                  <Icon className="w-5 h-5" />
+                  {item.path === "/bookings" && activeBookingCount > 0 && (
+                    <span className="absolute -right-2.5 -top-1.5 min-w-4 h-4 px-1 rounded-full bg-green-500 text-white text-[9px] font-bold flex items-center justify-center shadow-sm">
+                      {activeBookingCount}
+                    </span>
+                  )}
+                </span>
                 <span className="text-[10px] font-medium">{item.label}</span>
               </Link>
             );

@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { getAllVerifiedTalents } from "@/lib/mitraStore";
 import { reviews } from "@/data/mockData";
 import { getBookings } from "@/lib/bookingStore";
+import { getMitraActivityLabels } from "@/data/mitraActivities";
 
 // PERFORMA: Buat instance Intl.NumberFormat sekali di luar komponen agar tidak dibuat ulang
 const priceFormatter = new Intl.NumberFormat("id-ID", {
@@ -229,21 +230,48 @@ export default function MitraTalentDetail() {
               </div>
             </Card>
 
-            {/* Skills/Hobbies */}
+            {getMitraActivityLabels(talent.supportedActivities).length > 0 && (
+              <div>
+                <h3 className="mb-3 flex items-center gap-2 font-semibold">
+                  <Star className="h-4 w-4 text-primary" /> Aktivitas yang Bisa Ditemani
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {getMitraActivityLabels(talent.supportedActivities).map((activity) => (
+                    <Badge key={activity} variant="secondary" className="px-3 py-1.5">
+                      {activity}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {talent.hobbies && (
               <div>
                 <h3 className="font-semibold mb-3 flex items-center gap-2">
-                  <Heart className="w-4 h-4 text-primary" /> Hobi & Keahlian
+                  <Heart className="w-4 h-4 text-primary" /> Hobi & Minat
                 </h3>
                 <p className="text-muted-foreground whitespace-pre-wrap">{talent.hobbies}</p>
               </div>
             )}
-            
-            {!talent.hobbies && talent.skills && (
+
+            {talent.specialistSkills && talent.specialistSkills.length > 0 && (
               <div>
-                <h3 className="font-semibold mb-3">Keahlian</h3>
+                <h3 className="font-semibold mb-3">Keahlian Khusus</h3>
                 <div className="flex flex-wrap gap-2">
-                  {(talent.skills || []).map((skill: string) => (
+                  {talent.specialistSkills.map((skill: string) => (
+                    <Badge key={skill} variant="secondary" className="px-4 py-2">
+                      {skill}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!talent.hobbies && (!talent.specialistSkills || talent.specialistSkills.length === 0) && talent.skills?.length > 0 && (
+              <div>
+                <h3 className="font-semibold mb-3">Hobi & Keahlian</h3>
+                <div className="flex flex-wrap gap-2">
+                  {talent.skills.map((skill: string) => (
                     <Badge key={skill} variant="secondary" className="px-4 py-2">
                       {skill}
                     </Badge>

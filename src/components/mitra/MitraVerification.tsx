@@ -18,8 +18,6 @@ import {
   ChevronRight,
   LogOut,
   Send,
-  HelpCircle,
-  Award,
   ArrowRight,
   UserCheck,
   Check,
@@ -31,6 +29,12 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import {
+  getDefaultServicesForTalent,
+  parseMitraServiceRates,
+  type MitraServiceRate,
+} from '@/data/pricingReference';
+import { getMitraActivityLabels, normalizeMitraActivities } from '@/data/mitraActivities';
 
 export default function MitraVerification() {
   const navigate = useNavigate();
@@ -38,7 +42,7 @@ export default function MitraVerification() {
   const [mitra, setMitra] = useState<any>(() => getCurrentMitra() || getCurrentMitraSession());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showAppealForm, setShowAppealForm] = useState(false);
-  const [appealPrice, setAppealPrice] = useState('');
+  const [appealServiceRates, setAppealServiceRates] = useState<MitraServiceRate[]>([]);
   const [appealReason, setAppealReason] = useState('');
   const [appealFile, setAppealFile] = useState<string | null>(null);
   const [appealFileName, setAppealFileName] = useState<string | null>(null);
@@ -63,6 +67,13 @@ export default function MitraVerification() {
         const updatedMitra = {
           ...current,
           ...data,
+          services: parseMitraServiceRates(data.service_rates),
+          pending_service_rates: parseMitraServiceRates(data.pending_service_rates),
+          supportedActivities: normalizeMitraActivities(data.supported_activities ?? current.supportedActivities),
+          specialistSkills: Array.isArray(data.specialist_skills)
+            ? data.specialist_skills
+            : current.specialistSkills || [],
+          hobbies: data.hobbies || current.hobbies || '',
           name: data.full_name || current.name,
           full_name: data.full_name || current.full_name,
           verificationStatus:
@@ -162,13 +173,13 @@ export default function MitraVerification() {
     }
   };
 
-  // Handle Ajukan Banding
+  // Handle pengajuan perubahan tarif layanan
   const handleSendAppeal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!appealPrice || !appealReason.trim()) {
+    if (appealServiceRates.length === 0 || appealServiceRates.some((rate) => rate.price <= 0) || !appealReason.trim()) {
       toast({
         title: "Form Belum Lengkap",
-        description: "Masukkan tarif yang diajukan dan alasan banding.",
+        description: "Pastikan tarif setiap layanan valid dan alasan pengajuan sudah diisi.",
         variant: "destructive",
       });
       return;
@@ -183,7 +194,7 @@ export default function MitraVerification() {
         body: JSON.stringify({
           email: mitra.email,
           userId: mitra.id || mitra.user_id,
-          requestedPrice: Number(appealPrice),
+          requestedRates: appealServiceRates,
           note: appealReason,
           appeal_file: finalAppealFile,
         }),
@@ -212,13 +223,13 @@ export default function MitraVerification() {
       }
 
       toast({
-        title: "Banding Tarif Terkirim 📬",
-        description: "Admin akan meninjau permohonan penyesuaian tarif beserta bukti portofolio Anda.",
+        title: "Usulan Tarif Terkirim 📬",
+        description: "Admin akan meninjau usulan tarif layanan Anda. Tarif resmi tetap berlaku selama peninjauan.",
       });
       fetchLatestStatus(true);
     } catch (err: any) {
       toast({
-        title: "Gagal Mengirim Banding",
+        title: "Gagal Mengirim Usulan Tarif",
         description: err.message || "Terjadi kesalahan.",
         variant: "destructive",
       });
@@ -265,13 +276,17 @@ export default function MitraVerification() {
   const isRejected = status === 'rejected';
   const isPending = !isApproved && !isRejected;
 
-  const candidatePrice = mitra?.price ? Number(mitra.price) : 250000;
-  const pricingTierLabel =
-    mitra?.pricing_tier === 'tier3'
-      ? 'Tier 3 (Spesialis & Keahlian Khusus)'
-      : mitra?.pricing_tier === 'tier1'
-      ? 'Tier 1 (Kasual & Santai)'
-      : 'Tier 2 (Pendamping Acara & Sosial)';
+  const candidatePrice = mitra?.price ? Number(mitra.price) : 50000;
+  const officialServiceRates = getDefaultServicesForTalent({
+    ...mitra,
+    services: parseMitraServiceRates(mitra?.services || mitra?.service_rates),
+    supportedActivities: mitra?.supportedActivities ?? mitra?.supported_activities,
+    price: candidatePrice,
+    skills: typeof mitra?.category === "string" ? mitra.category.split(",").map((skill: string) => skill.trim()) : [],
+  });
+  const activityLabels = getMitraActivityLabels(
+    mitra?.supportedActivities ?? mitra?.supported_activities
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-orange-50/60 via-background to-background py-8 px-4">
@@ -453,7 +468,7 @@ export default function MitraVerification() {
                 <h3 className="text-xl font-bold text-foreground">Berkas Anda Sedang Ditinjau Admin ⏳</h3>
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   Tim kurasi RentMate sedang memverifikasi identitas dan keahlian yang Anda ajukan.
-                  Admin akan menetapkan tarif resmi per jam yang paling objektif dan kompetitif untuk profil Anda.
+                  Admin akan menetapkan tarif resmi untuk setiap layanan/paket berdasarkan kategori dan acuan pasar.
                 </p>
                 <div className="inline-flex items-center gap-2 bg-amber-100/70 text-amber-900 dark:bg-amber-950/70 dark:text-amber-300 px-3 py-1.5 rounded-lg text-xs font-medium">
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
@@ -464,15 +479,15 @@ export default function MitraVerification() {
 
             <div className="mt-8 border-t pt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div className="bg-muted/40 p-3.5 rounded-xl border">
-                <p className="text-muted-foreground font-medium mb-1">Mengapa Admin yang Menentukan Tarif?</p>
+                <p className="text-muted-foreground font-medium mb-1">Bagaimana tarif layanan ditetapkan?</p>
                 <p className="text-foreground/80 leading-normal">
-                  Agar harga transparan, wajar, dan mencegah perang tarif antar mitra. Admin menyesuaikan harga dengan kategori dan standar regional.
+                  Admin menetapkan tarif resmi untuk setiap layanan/paket. Mitra dapat mengajukan perubahan tarif per layanan dan tarif hanya berubah setelah disetujui admin.
                 </p>
               </div>
               <div className="bg-muted/40 p-3.5 rounded-xl border">
-                <p className="text-muted-foreground font-medium mb-1">Bisa Nego / Ajukan Banding?</p>
+                <p className="text-muted-foreground font-medium mb-1">Bisakah tarif diajukan ulang?</p>
                 <p className="text-foreground/80 leading-normal">
-                  Tentu! Begitu admin menetapkan tarif, Anda diberi pilihan: <strong>Setujui Tarif</strong> atau <strong>Ajukan Banding</strong> jika merasa belum sesuai.
+                  Setelah tarif awal ditetapkan, mitra dapat mengajukan perubahan untuk satu atau beberapa layanan. Tarif berubah hanya setelah disetujui admin.
                 </p>
               </div>
             </div>
@@ -523,7 +538,7 @@ export default function MitraVerification() {
                     Pemberitahuan: Permohonan Banding Tarif Anda Belum Disetujui
                   </div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Admin telah meninjau pengajuan banding Anda dan memutuskan untuk tetap mempertahankan tarif awal sebesar <strong>Rp {candidatePrice.toLocaleString('id-ID')}/jam</strong>.
+                    Admin belum menyetujui usulan tarif. Tarif resmi per layanan saat ini tetap digunakan.
                   </p>
                   <div className="p-3 bg-card/90 rounded-xl border border-amber-300 dark:border-amber-800 text-xs space-y-1">
                     <p className="font-semibold text-amber-800 dark:text-amber-300">Alasan Penolakan Banding dari Admin:</p>
@@ -543,7 +558,7 @@ export default function MitraVerification() {
                     Permohonan Banding Tarif Sedang Ditinjau Admin
                   </div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Permohonan penyesuaian tarif Anda sedang dievaluasi oleh tim kurasi. Anda tetap dapat menyetujui tarif awal kapan saja jika ingin langsung mengaktifkan akun.
+                    Usulan perubahan tarif sedang dievaluasi admin. Tarif resmi saat ini tetap berlaku sampai keputusan diberikan.
                   </p>
                   <div className="p-2.5 bg-card/90 rounded-xl border border-orange-200 text-xs italic text-foreground">
                     {mitra.appeal_note}
@@ -577,68 +592,96 @@ export default function MitraVerification() {
               )}
 
               {/* Box Tampilan Tarif Resmi */}
-              <div className="bg-card border-2 border-orange-400/30 rounded-2xl p-6 shadow-sm my-6">
-                <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-                  <div>
-                    <span className="text-xs uppercase font-bold tracking-wider text-orange-800 bg-orange-100 px-2.5 py-1 rounded-md">
-                      Tarif Resmi yang Ditetapkan Admin
-                    </span>
-                    <div className="flex items-baseline gap-2 mt-2">
-                      <span className="text-3xl md:text-4xl font-extrabold text-foreground">
-                        Rp {candidatePrice.toLocaleString('id-ID')}
-                      </span>
-                      <span className="text-muted-foreground text-sm font-medium">/ jam</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                      <Award className="w-4 h-4 text-orange-600" />
-                      <span>Kategori Kelas: <strong>{pricingTierLabel}</strong></span>
-                    </div>
-                  </div>
-
-                  <div className="border-t md:border-t-0 md:border-l md:pl-6 pt-4 md:pt-0 max-w-sm text-xs text-muted-foreground space-y-1.5">
-                    <p className="font-semibold text-foreground flex items-center gap-1.5">
-                      <HelpCircle className="w-3.5 h-3.5 text-primary" />
-                      Catatan Pertimbangan Admin:
-                    </p>
-                    <p className="leading-relaxed italic">
-                      "{mitra?.admin_price_note?.includes('[BANDING DITOLAK]')
-                        ? mitra.admin_price_note.replace('[BANDING DITOLAK]', '').trim()
-                        : (mitra?.admin_price_note || `Tarif dihitung berdasarkan kualifikasi ${mitra?.category || 'keahlian yang dipilih'}, kelengkapan portofolio sosial media, dan kesesuaian dengan daya beli klien aktif.`)}"
-                    </p>
-                  </div>
+              <div className="my-6 rounded-2xl border border-orange-200 bg-white p-5 shadow-sm sm:p-6">
+                <div className="space-y-1">
+                  <p className="text-xs font-bold uppercase tracking-wide text-orange-700">Harga resmi dari admin</p>
+                  <h4 className="text-xl font-bold text-foreground">Bayar sesuai aktivitas yang dipesan</h4>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
+                    Tidak ada satu harga untuk semua kegiatan. Pilih aktivitas, lalu lihat tarifnya di bawah.
+                  </p>
                 </div>
+
+                {activityLabels.length > 0 && (
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-semibold text-foreground">Aktivitas yang kamu tawarkan</p>
+                    <div className="flex flex-wrap gap-2">
+                      {activityLabels.map((activity) => (
+                        <Badge key={activity} variant="secondary" className="font-medium">{activity}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-4 space-y-2">
+                  {officialServiceRates.length > 0 ? officialServiceRates.map((rate) => (
+                    <div key={rate.id} className="flex flex-col gap-1 rounded-xl border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{rate.category}</p>
+                        {rate.description && <p className="text-xs text-muted-foreground">{rate.description}</p>}
+                      </div>
+                      <p className="shrink-0 text-sm font-bold text-orange-700">
+                        Rp {rate.price.toLocaleString('id-ID')} <span className="font-medium text-muted-foreground">{rate.unitLabel}</span>
+                      </p>
+                    </div>
+                  )) : (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      Tarif layanan belum tersedia. Hubungi admin sebelum menyetujui tarif.
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-4 rounded-xl bg-orange-50 p-3 text-xs leading-relaxed text-orange-950">
+                  <strong>Contoh hitung:</strong> tarif Rp50.000/jam × 2 jam = Rp100.000 untuk jasa mitra.
+                  Itu hanya contoh; harga sebenarnya mengikuti aktivitas yang kamu pilih. Biaya makan, tiket, dan transportasi dibicarakan terpisah.
+                </div>
+
+                {mitra?.admin_price_note && (
+                  <details className="mt-3 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer font-semibold text-foreground">Lihat catatan admin</summary>
+                    <p className="mt-2 leading-relaxed">
+                      {mitra.admin_price_note.replace('[BANDING DITOLAK]', '').trim()}
+                    </p>
+                  </details>
+                )}
               </div>
 
               {/* Action Buttons: Setujui vs Banding */}
               {!showAppealForm && (
                 <div className="space-y-4 pt-2">
                   <div className="flex flex-col sm:flex-row items-center gap-3">
-                    <Button
-                      size="lg"
-                      onClick={handleAcceptPrice}
-                      disabled={isAccepting}
-                      className="w-full sm:flex-1 gap-2 font-bold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white shadow-md shadow-orange-500/20 h-12"
-                    >
-                      <CheckCircle2 className="w-5 h-5" />
-                      {isAccepting ? "Mengaktifkan Akun..." : "Setujui Tarif & Buka Dashboard Mitra ➔"}
-                    </Button>
+                    {!mitra?.price_accepted && (
+                      <Button
+                        size="lg"
+                        onClick={handleAcceptPrice}
+                        disabled={isAccepting || officialServiceRates.length === 0}
+                        className="w-full sm:flex-1 gap-2 font-bold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white shadow-md shadow-orange-500/20 h-12"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        {isAccepting ? "Mengaktifkan Akun..." : "Setujui Tarif & Buka Dashboard Mitra ➔"}
+                      </Button>
+                    )}
 
                     <Button
                       variant="outline"
                       size="lg"
-                      onClick={() => setShowAppealForm(true)}
+                      onClick={() => {
+                        setAppealServiceRates(officialServiceRates);
+                        setShowAppealForm(true);
+                      }}
                       className="w-full sm:w-auto text-xs sm:text-sm h-12 border-primary/30 text-primary hover:bg-primary/5"
                     >
                       {mitra?.admin_price_note?.includes('[BANDING DITOLAK]')
-                        ? "Ajukan Banding Ulang"
+                        ? "Ajukan Tarif Ulang"
                         : mitra?.appeal_note
-                        ? "Perbarui Pengajuan Banding"
-                        : "Ajukan Banding / Negosiasi Tarif"}
+                        ? "Perbarui Usulan Tarif"
+                        : "Ajukan Perubahan Tarif Layanan"}
                     </Button>
                   </div>
 
                   <p className="text-center text-xs text-muted-foreground">
-                    Dengan menyetujui tarif, profil Anda akan langsung tampil di pencarian talent dan siap menerima order booking klien.
+                    {mitra?.price_accepted
+                      ? "Tarif resmi saat ini tetap berlaku sampai admin menyetujui pengajuan perubahan."
+                      : "Dengan menyetujui tarif, profil Anda akan langsung tampil di pencarian talent dan siap menerima order booking klien."}
                   </p>
                 </div>
               )}
@@ -649,7 +692,7 @@ export default function MitraVerification() {
                   <div className="flex items-center justify-between">
                     <h4 className="font-bold text-sm text-foreground flex items-center gap-2">
                       <Send className="w-4 h-4 text-primary" />
-                      Formulir Banding / Negosiasi Tarif
+                      Formulir Usulan Tarif Layanan
                     </h4>
                     <Button
                       type="button"
@@ -663,23 +706,37 @@ export default function MitraVerification() {
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    Tuliskan nominal tarif yang Anda harapkan beserta alasan dan bukti portofolio / sertifikat pendukung sebagai penguat argumen agar admin menyetujui tarif Anda.
+                    Ajukan tarif yang Anda harapkan untuk setiap layanan. Tarif resmi saat ini tetap berlaku sampai admin menyetujui perubahan.
                   </p>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="appealPrice" className="text-xs">Nominal Tarif yang Diajukan (Rp / Jam)</Label>
-                    <Input
-                      id="appealPrice"
-                      type="number"
-                      placeholder="Contoh: 350000"
-                      value={appealPrice}
-                      onChange={(e) => setAppealPrice(e.target.value)}
-                      required
-                    />
+                  <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-3 text-xs leading-relaxed text-orange-950">
+                    Ajukan perubahan hanya untuk aktivitas yang tercantum. Tulis harga yang kamu usulkan; admin akan meninjau sebelum tarif berubah.
+                  </div>
+
+                  <div className="space-y-3">
+                    <Label className="text-xs">Tarif yang Diajukan per Layanan / Paket (Rp)</Label>
+                    {appealServiceRates.map((rate, index) => (
+                      <div key={rate.id} className="grid grid-cols-[1fr_140px] items-center gap-3 rounded-lg border bg-background p-3">
+                        <div>
+                          <p className="text-xs font-semibold">{rate.category}</p>
+                          <p className="text-[11px] text-muted-foreground">{rate.unitLabel}</p>
+                        </div>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={rate.price}
+                          aria-label={`Tarif yang diajukan untuk ${rate.category}`}
+                          onChange={(e) => setAppealServiceRates((current) => current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, price: Number(e.target.value) } : item
+                          ))}
+                          required
+                        />
+                      </div>
+                    ))}
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="appealReason" className="text-xs">Alasan & Penguat Banding</Label>
+                    <Label htmlFor="appealReason" className="text-xs">Alasan Pengajuan Tarif</Label>
                     <Textarea
                       id="appealReason"
                       placeholder="Jelaskan sertifikat, jam terbang, portofolio karya, atau alasan spesifik mengapa Anda layak mendapatkan tarif tersebut..."
@@ -695,7 +752,7 @@ export default function MitraVerification() {
                     <div className="flex items-center justify-between">
                       <Label htmlFor="appealProofFile" className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
                         <FileText className="w-3.5 h-3.5 text-orange-600" />
-                        Lampirkan Bukti Portofolio / Sertifikat (Opsional Penguat Banding)
+                        Lampirkan Bukti Portofolio / Sertifikat (Opsional)
                       </Label>
                       <Badge variant="outline" className="text-[10px]">Opsional</Badge>
                     </div>
@@ -785,7 +842,7 @@ export default function MitraVerification() {
                       className="gap-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-medium shadow-xs"
                     >
                       <Send className="w-3.5 h-3.5" />
-                      {isSubmittingAppeal ? "Mengirim..." : "Kirim Permohonan Banding ke Admin"}
+                      {isSubmittingAppeal ? "Mengirim..." : "Kirim Usulan Tarif ke Admin"}
                     </Button>
                   </div>
                 </form>

@@ -9,6 +9,8 @@ import {
 import { talents } from "@/data/mockData";
 import { getBookings, getTalentReviewStats } from "@/lib/bookingStore";
 import { getCurrentUser } from "@/lib/userStore";
+import { parseMitraServiceRates, type MitraServiceRate } from "@/data/pricingReference";
+import { inferLegacyMitraActivities, normalizeMitraActivities } from "@/data/mitraActivities";
 import {
   saveCurrentMitraSession,
   getCurrentMitraSession,
@@ -25,6 +27,22 @@ let listeners: (() => void)[] = [];
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
+}
+
+function parseMitraStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === "string");
+    }
+  } catch {
+    // Older profiles stored comma-separated values.
+  }
+  return value.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
 }
 
 /* ================= STORAGE ================= */
@@ -253,7 +271,12 @@ export async function getAllVerifiedTalents() {
     const response = await fetch('/api/talents');
     if (!response.ok) {
       console.error("Error fetching approved talents from API");
-      return talents.map(t => ({ ...t, isLegacy: true, talentId: t.id }));
+      return talents.map(t => ({
+        ...t,
+        supportedActivities: inferLegacyMitraActivities(t.skills, t.hobbies, t.bio),
+        isLegacy: true,
+        talentId: t.id,
+      }));
     }
     const approvedTalents = await response.json();
 
@@ -263,6 +286,8 @@ export async function getAllVerifiedTalents() {
       const targetId = mitra.user_id || mitra.id;
       const mockTalent = talents.find(t => t.id === targetId || t.email === mitra.email);
       const stats = getTalentReviewStats({ id: targetId, talentId: targetId });
+      const specialistSkills = parseMitraStringList(mitra.specialist_skills);
+      const hasSeparateInterests = mitra.hobbies != null || mitra.specialist_skills != null;
 
       return {
         id: targetId,
@@ -271,6 +296,16 @@ export async function getAllVerifiedTalents() {
         photo: mitra.photo || mockTalent?.photo || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(mitra.full_name || mitra.name || 'Talent')}`,
         city: mitra.address || mockTalent?.city || 'Indonesia',
         category: mitra.category || mockTalent?.skills?.[0] || 'Teman Acara',
+        supportedActivities: mitra.supported_activities != null
+          ? normalizeMitraActivities(mitra.supported_activities)
+          : inferLegacyMitraActivities(
+              mitra.category,
+              mitra.hobbies,
+              mitra.specialist_skills,
+              mitra.description,
+            ),
+        hobbies: parseMitraStringList(mitra.hobbies).join(", "),
+        specialistSkills,
         description: mitra.description || mockTalent?.bio || 'Siap menemani acara kamu.',
         rating: stats.reviewCount > 0 ? stats.rating : 0,
         reviewCount: stats.reviewCount,
@@ -282,9 +317,14 @@ export async function getAllVerifiedTalents() {
         age: (mitra.age && Number(mitra.age) > 0) ? Number(mitra.age) : (mockTalent?.age || 23),
         email: mitra.email,
         phone: mitra.phone || '',
-        skills: (mitra.category && mitra.category.trim())
-          ? mitra.category.split(',').map((s: string) => s.trim()).filter(Boolean)
-          : (mockTalent?.skills || ['Teman Acara']),
+        services: parseMitraServiceRates(mitra.service_rates),
+        experienceLevel: mitra.experience_level || '',
+        portfolioFile: mitra.portfolio_file || '',
+        skills: hasSeparateInterests
+          ? specialistSkills
+          : (mitra.category && mitra.category.trim())
+            ? mitra.category.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : (mockTalent?.skills || ['Teman Acara']),
         status: mitra.status || 'approved',
       };
     });
@@ -297,6 +337,7 @@ export async function getAllVerifiedTalents() {
       const stats = getTalentReviewStats({ id: t.id, talentId: t.id });
       return { 
         ...t, 
+        supportedActivities: inferLegacyMitraActivities(t.skills, t.hobbies, t.bio),
         isLegacy: true,
         talentId: t.id,
         email: t.email,
@@ -337,6 +378,9 @@ export async function registerMitra(
         description: data.description,
         price: data.price,
         category: data.category,
+        supported_activities: data.supported_activities,
+        hobbies: data.hobbies,
+        specialist_skills: data.specialist_skills,
         photo: data.photo,
         ktp: data.ktp,
         age: data.age,
@@ -454,11 +498,15 @@ export async function loginMitra(data: MitraLoginData): Promise<any> {
       lastActive: new Date().toISOString(),
       isLegacyTalent: false,
       price: result.user?.price ? Number(result.user.price) : 0,
+      services: parseMitraServiceRates(result.user?.service_rates),
       pricing_tier: result.user?.pricing_tier || 'tier2',
       price_accepted: Boolean(result.user?.price_accepted),
       rejection_reason: result.user?.rejection_reason || '',
       appeal_note: result.user?.appeal_note || '',
       category: result.user?.category || '',
+      supportedActivities: normalizeMitraActivities(result.user?.supported_activities),
+      hobbies: parseMitraStringList(result.user?.hobbies).join(", "),
+      specialistSkills: parseMitraStringList(result.user?.specialist_skills),
       experience_level: result.user?.experience_level || 'menengah',
       price_expectation: result.user?.price_expectation || '',
       social_media: result.user?.social_media || '',
@@ -494,7 +542,7 @@ export function logoutMitra() {
 }
 
 /* ================= APPROVE ================= */
-export async function approveMitra(mitraId: string, mitraEmail: string, mitraName: string, price?: number, pricingTier?: string, adminPriceNote?: string) {
+export async function approveMitra(mitraId: string, mitraEmail: string, mitraName: string, price?: number, pricingTier?: string, adminPriceNote?: string, serviceRates?: MitraServiceRate[]) {
   console.log(`Menyetujui mitra ${mitraEmail} dan mengirim email.`);
   try {
     const response = await fetch('/send-approval', {
@@ -506,6 +554,7 @@ export async function approveMitra(mitraId: string, mitraEmail: string, mitraNam
         price,
         pricing_tier: pricingTier || 'tier2',
         admin_price_note: adminPriceNote || null,
+        service_rates: serviceRates,
         loginLink: `${window.location.origin}/mitra/login`
       }),
     });
@@ -538,8 +587,10 @@ export async function updateTalentProfile(
     photo?: string;
     city?: string;
     category?: string;
+    supportedActivities?: string[];
     description?: string;
     price?: number;
+    services?: MitraServiceRate[];
     phone?: string;
     age?: number;
   }
@@ -551,8 +602,12 @@ export async function updateTalentProfile(
     if (data.photo !== undefined) payload.photo = data.photo;
     if (data.city !== undefined) payload.address = data.city;
     if (data.category !== undefined) payload.category = data.category;
+    if (data.supportedActivities !== undefined) {
+      payload.supported_activities = data.supportedActivities;
+    }
     if (data.description !== undefined) payload.description = data.description;
     if (data.price !== undefined) payload.price = data.price;
+    if (data.services !== undefined) payload.service_rates = data.services;
     if (data.phone !== undefined) payload.phone = data.phone;
     if (data.age !== undefined) payload.age = data.age;
 
@@ -642,6 +697,7 @@ export async function updateMitraProfile(data: {
   photo?: string;
   city?: string;
   category?: string;
+  supportedActivities?: string[];
   description?: string;
   price?: number;
   availability?: string;

@@ -29,7 +29,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-type BookingStatus = "pending_payment" | "pending_approval" | "pending_mitra" | "approved" | "completed" | "cancelled" | "ongoing" | "expired";
+type BookingStatus = "pending_payment" | "pending_approval" | "pending_mitra" | "approved" | "upcoming" | "completed" | "cancelled" | "ongoing" | "expired";
 
 export default function Bookings() {
   const [bookings, setBookings] = useState<SharedBooking[]>([]);
@@ -98,7 +98,16 @@ export default function Bookings() {
     if (booking.paymentStatus === "pending") return "pending_payment";
     if ((booking.approvalStatus as string) === "pending_mitra") return "pending_mitra";
     if (booking.approvalStatus === "pending_approval") return "pending_approval";
-    if (booking.approvalStatus === "approved") return "approved";
+    if (booking.approvalStatus === "approved") {
+      if (booking.date) {
+        const timeStr = booking.time ? (booking.time.length === 5 ? `${booking.time}:00` : booking.time) : "00:00:00";
+        const startTime = new Date(`${booking.date}T${timeStr}`);
+        if (!isNaN(startTime.getTime()) && startTime > new Date()) {
+          return "upcoming";
+        }
+      }
+      return "approved";
+    }
 
     return "completed";
   };
@@ -106,7 +115,9 @@ export default function Bookings() {
   const getStatusBadge = (status: BookingStatus | "pending_mitra") => {
     switch (status) {
       case "ongoing":
-        return <Badge variant="success" className="animate-pulse">🔴 Sedang Berjalan</Badge>;
+        return <Badge variant="success" className="animate-pulse bg-emerald-600 text-white font-medium">🔴 Sedang Berlangsung</Badge>;
+      case "upcoming":
+        return <Badge variant="accent" className="bg-sky-50 text-sky-700 border-sky-300 dark:bg-sky-950/40 dark:text-sky-300 font-medium">Jadwal Mendatang</Badge>;
       case "pending_payment":
         return <Badge variant="warning">Menunggu Pembayaran</Badge>;
       case "pending_approval":
@@ -114,7 +125,7 @@ export default function Bookings() {
       case "pending_mitra":
         return <Badge variant="accent">Menunggu Persetujuan Mitra</Badge>;
       case "approved":
-        return <Badge variant="success">Disetujui</Badge>;
+        return <Badge variant="success">Disetujui / Dikonfirmasi</Badge>;
       case "completed":
         return <Badge variant="secondary">Selesai</Badge>;
       case "cancelled":
@@ -135,7 +146,14 @@ export default function Bookings() {
 
   const activeBookings = bookings.filter((b) => {
     const status = getBookingStatus(b);
-    return status === "ongoing" || status === "approved" || status === "pending_approval" || (status as string) === "pending_mitra" || status === "pending_payment";
+    return (
+      status === "ongoing" ||
+      status === "upcoming" ||
+      status === "approved" ||
+      status === "pending_approval" ||
+      (status as string) === "pending_mitra" ||
+      status === "pending_payment"
+    );
   });
 
   const completedBookings = bookings.filter((b) => {
@@ -147,11 +165,11 @@ export default function Bookings() {
     const talent = allTalents.find(
       (item) => item.id === booking.talentId || item.talentId === booking.talentId
     );
-    const talentName = talent?.name || booking.talentName || "Talent";
+    const talentName = talent?.name || booking.talentName || "Mitra";
     const talentPhoto = talent?.photo || booking.talentPhoto || "";
     const talentCity = talent?.city || "Tidak diketahui";
-    const canChat = getBookingStatus(booking) === "approved";
     const bookingStatus = getBookingStatus(booking);
+    const canChat = bookingStatus === "approved" || bookingStatus === "upcoming" || bookingStatus === "ongoing";
     const canDelete = bookingStatus === "pending_payment" || bookingStatus === "pending_approval";
 
     return (
@@ -175,7 +193,9 @@ export default function Bookings() {
             </div>
 
             <p className="text-sm text-primary font-medium mb-2">
+              <span className="text-muted-foreground text-xs font-normal mr-1">Aktivitas:</span>
               {booking.purpose}
+              <span className="text-muted-foreground text-xs font-normal ml-2">({booking.type === 'online' ? 'Online' : 'Offline'})</span>
             </p>
 
             <div className="flex flex-wrap gap-3 text-xs text-muted-foreground mb-3">
@@ -282,7 +302,7 @@ export default function Bookings() {
                   </DialogTrigger>
                   <DialogContent className="sm:max-w-[425px]">
                     <DialogHeader>
-                      <DialogTitle>Detail Pemesanan</DialogTitle>
+                      <DialogTitle>Detail Pesanan</DialogTitle>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
                       <div className="flex items-center gap-4">
@@ -414,12 +434,12 @@ export default function Bookings() {
             ) : (
               <Card className="p-12 text-center">
                 <Calendar className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-xl font-bold mb-2">Belum Ada Pemesanan</h3>
+                <h3 className="text-xl font-bold mb-2">Belum Ada Pesanan Aktif</h3>
                 <p className="text-muted-foreground mb-6">
-                  Kamu belum memiliki pemesanan yang aktif
+                  Kamu belum memiliki pesanan yang aktif saat ini
                 </p>
                 <Link to="/talents">
-                  <Button variant="hero">Pilih Teman</Button>
+                  <Button variant="hero">Cari Teman Aktivitas</Button>
                 </Link>
               </Card>
             )}
@@ -433,9 +453,9 @@ export default function Bookings() {
             ) : (
               <Card className="p-12 text-center">
                 <Calendar className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-xl font-bold mb-2">Belum Ada Riwayat</h3>
+                <h3 className="text-xl font-bold mb-2">Belum Ada Riwayat Pesanan</h3>
                 <p className="text-muted-foreground">
-                  Pemesanan yang sudah selesai akan muncul di sini
+                  Pesanan yang telah selesai atau dibatalkan akan tersimpan di sini
                 </p>
               </Card>
             )}
